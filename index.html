@@ -403,13 +403,18 @@
       }
       listEl.innerHTML = products.map(p => {
         const isThermos = p.name.toLowerCase().includes('kanne');
+        const nameLower = p.name.toLowerCase();
+        const isFruktfatStor  = nameLower.includes('fruktfat') && nameLower.includes('stor');
+        const isFruktfatLiten = nameLower.includes('fruktfat') && nameLower.includes('liten');
         return `
-        <div class="product-row" id="row-${p.id}" data-is-thermos="${isThermos}" onclick="toggleProduct(${p.id})">
+        <div class="product-row" id="row-${p.id}" data-is-thermos="${isThermos}"
+          data-fruktfat="${isFruktfatStor ? 'stor' : isFruktfatLiten ? 'liten' : ''}"
+          onclick="toggleProduct(${p.id})">
           <input type="checkbox" id="chk-${p.id}" onclick="event.stopPropagation()" onchange="updateProductRow(${p.id})">
           <span class="prod-label">${escHtml(p.name)}</span>
           <span class="suggestion-badge" id="sug-${p.id}" style="display:none"></span>
           <div class="qty-wrap" id="qty-wrap-${p.id}" style="display:none" onclick="event.stopPropagation()">
-            <label for="qty-${p.id}">Antall:</label>
+            <label for="qty-${p.id}">Antall ${escHtml(p.name)}:</label>
             <input type="number" id="qty-${p.id}" value="1" min="1" max="999"
               oninput="document.getElementById('row-${p.id}').dataset.manualQty='true'">
           </div>
@@ -448,12 +453,12 @@
   function updateThermosSuggestion() {
     const people = parseInt(document.getElementById('num-people')?.value) || 0;
 
+    // ── Kaffekanne suggestion ──
     document.querySelectorAll('.product-row[data-is-thermos="true"]').forEach(row => {
-      const id      = row.id.replace('row-', '');
-      const sugEl   = document.getElementById('sug-'      + id);
-      const chk     = document.getElementById('chk-'      + id);
-      const qtyEl   = document.getElementById('qty-'      + id);
-      const qtyWrap = document.getElementById('qty-wrap-' + id);
+      const id    = row.id.replace('row-', '');
+      const sugEl = document.getElementById('sug-' + id);
+      const chk   = document.getElementById('chk-' + id);
+      const qtyEl = document.getElementById('qty-' + id);
 
       if (people > 0) {
         const suggested = Math.ceil(people / 8);
@@ -461,12 +466,67 @@
           sugEl.style.display = '';
           sugEl.textContent   = '💡 Foreslått antall: ' + suggested;
         }
-        // If already checked, update qty to match suggested (unless manually set)
         if (chk?.checked && qtyEl && !row.dataset.manualQty) {
           qtyEl.value = suggested;
         }
       } else {
-        // No people count — hide badge
+        if (sugEl) sugEl.style.display = 'none';
+      }
+    });
+
+    // ── Fruktfat suggestion ──
+    // Liten covers 1–12, Stor covers up to 25.
+    // Rules (examples):
+    //   1–12  → 1 liten
+    //  13–25  → 1 stor
+    //  26–37  → 1 stor + 1 liten  (25 from stor, up to 12 remainder → liten)
+    //  38–50  → 2 stor
+    //  51–62  → 2 stor + 1 liten
+    //  63–75  → 3 stor  … etc.
+    let sugStorQty = 0, sugLitenQty = 0;
+    if (people > 0) {
+      const storBase = Math.floor(people / 25);
+      const remainder = people % 25;
+      if (storBase === 0) {
+        // 1–24 people
+        if (remainder <= 12) { sugStorQty = 0; sugLitenQty = 1; }
+        else                 { sugStorQty = 1; sugLitenQty = 0; }
+      } else {
+        // 25+ people
+        if (remainder === 0)       { sugStorQty = storBase;     sugLitenQty = 0; }
+        else if (remainder <= 12)  { sugStorQty = storBase;     sugLitenQty = 1; }
+        else                       { sugStorQty = storBase + 1; sugLitenQty = 0; }
+      }
+    }
+
+    document.querySelectorAll('.product-row[data-fruktfat]').forEach(row => {
+      const fruktfatType = row.dataset.fruktfat; // 'stor' or 'liten' or ''
+      if (!fruktfatType) return;
+
+      const id    = row.id.replace('row-', '');
+      const sugEl = document.getElementById('sug-' + id);
+      const chk   = document.getElementById('chk-' + id);
+      const qtyEl = document.getElementById('qty-' + id);
+
+      const sugQty = fruktfatType === 'stor' ? sugStorQty : sugLitenQty;
+
+      if (people > 0 && sugQty > 0) {
+        if (sugEl) {
+          sugEl.style.display = '';
+          sugEl.textContent   = '💡 Foreslått antall: ' + sugQty;
+        }
+        if (chk?.checked && qtyEl && !row.dataset.manualQty) {
+          qtyEl.value = sugQty;
+        }
+      } else if (people > 0 && sugQty === 0) {
+        // This size not recommended for this people count
+        if (sugEl) {
+          sugEl.style.display = '';
+          sugEl.textContent   = fruktfatType === 'stor'
+            ? '💡 Passer for 13+ gjester'
+            : '💡 Passer for 1–12 gjester';
+        }
+      } else {
         if (sugEl) sugEl.style.display = 'none';
       }
     });
