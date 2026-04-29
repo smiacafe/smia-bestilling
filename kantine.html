@@ -78,6 +78,9 @@
   .modal { background:var(--bg); border-radius:var(--radius); padding:1.5rem; width:600px; max-width:100%; border:1px solid var(--border2); box-shadow:0 8px 32px rgba(0,0,0,0.18); }
   .modal h3 { font-size:16px; font-weight:700; margin-bottom:1rem; }
   .modal-footer { display:flex; gap:8px; margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--border); flex-wrap:wrap; }
+  .rejected-row td { text-decoration:line-through; color:var(--text3) !important; opacity:0.6; }
+  .reject-btn { background:none; border:1px solid #e0a0a0; color:#c0392b; border-radius:4px; padding:1px 6px; font-size:11px; cursor:pointer; white-space:nowrap; }
+  .reject-btn.undo { border-color:#a0c0a0; color:#2e7d32; }
   /* Pickup */
   .pickup-item { display:flex; align-items:center; gap:12px; padding:12px; border-bottom:1px solid var(--border); cursor:pointer; border-radius:var(--radius-sm); transition:background 0.1s; user-select:none; }
   .pickup-item:last-child { border-bottom:none; }
@@ -176,9 +179,17 @@ function itemCheckKeys(item){
 }
 
 function orderTotal(o){
+  const rej=o.rejected_items||{};
   return (o.items||[]).reduce((s,i)=>{
     const p=getProd(i.pid);if(!p)return s;
-    return s+p.price*Number(i.qty);
+    if(i.splits&&i.splits.length>0){
+      return s+i.splits.reduce((ss,sp,idx)=>{
+        const key=i.pid+"_"+idx;
+        return rej[key]?ss:ss+p.price*Number(sp.qty);
+      },0);
+    }
+    const key=String(i.pid);
+    return rej[key]?s:s+p.price*Number(i.qty);
   },0);
 }
 
@@ -204,7 +215,8 @@ async function loadAll(){
       checklist:normChecklist(parseJSON(o.checklist,{})),
       delivered_at:o.delivered_at||null,
       canteen_note:o.canteen_note||null,
-      item_notes:parseJSON(o.item_notes,{})
+      item_notes:parseJSON(o.item_notes,{}),
+      rejected_items:parseJSON(o.rejected_items,{})
     }));
     render();
   }catch(e){
@@ -293,8 +305,9 @@ function buildOrders(){
     if(isAdmin())html+='<span style="font-size:13px;color:var(--text2);font-weight:600">'+fmt(total)+'</span>';
     html+='<button class="btn btn-sm no-print" onclick="printOrder('+o.id+')">&#x1F5A8; Skriv ut</button>';
     html+='</div>';
+    const rej=o.rejected_items||{};
     html+='<table><thead><tr><th>Produkt</th><th>Dag</th><th>Ant.</th><th>Notat</th>';
-    if(isAdmin())html+='<th style="text-align:right">Delsum</th>';
+    if(isAdmin())html+='<th style="text-align:right">Delsum</th><th></th>';
     if(isAcc)html+='<th>Status</th>';
     html+='</tr></thead><tbody>';
     (o.items||[]).forEach(function(i){
@@ -303,12 +316,14 @@ function buildOrders(){
         i.splits.forEach(function(sp,idx){
           const key=i.pid+"_"+idx;
           const picked=key in cl;
-          html+='<tr>';
+          const rejected=!!rej[key];
+          html+='<tr'+(rejected?' class="rejected-row"':'')+' >';
           html+='<td style="font-weight:500">'+(idx===0?p.name:'<span style="color:var(--text3)">↳</span>')+'</td>';
           html+='<td class="item-note">'+sp.day+'</td>';
           html+='<td style="white-space:nowrap">'+fmtQty(sp.qty)+'&nbsp;'+p.unit+'</td>';
           html+='<td class="item-note">'+(idx===0&&i.note?i.note:'')+'</td>';
-          if(isAdmin())html+='<td style="text-align:right">'+fmt(p.price*Number(sp.qty))+'</td>';
+          if(isAdmin())html+='<td style="text-align:right">'+(rejected?'<span style="text-decoration:line-through">'+fmt(p.price*Number(sp.qty))+'</span>':fmt(p.price*Number(sp.qty)))+'</td>'
+            +'<td><button class="reject-btn'+(rejected?' undo':'')+'" onclick="toggleRejectItem('+o.id+',\''+key+'\')">'+(rejected?'↩ Gjeninnfør':'✕ Stryk')+'</button></td>';
           if(isAcc){
             const pickDate=picked&&cl[key]?new Date(cl[key]).toLocaleDateString("nb-NO",{day:"numeric",month:"short"}):"";
             const iNoteS=(o.item_notes||{})[key]||"";
@@ -319,12 +334,14 @@ function buildOrders(){
       } else {
         const key=String(i.pid);
         const picked=key in cl;
-        html+='<tr>';
+        const rejected=!!rej[key];
+        html+='<tr'+(rejected?' class="rejected-row"':'')+' >';
         html+='<td style="font-weight:500">'+p.name+'</td>';
         html+='<td></td>';
         html+='<td style="white-space:nowrap">'+fmtQty(i.qty)+'&nbsp;'+p.unit+'</td>';
         html+='<td class="item-note">'+(i.note||'')+'</td>';
-        if(isAdmin())html+='<td style="text-align:right">'+fmt(p.price*Number(i.qty))+'</td>';
+        if(isAdmin())html+='<td style="text-align:right">'+(rejected?'<span style="text-decoration:line-through">'+fmt(p.price*Number(i.qty))+'</span>':fmt(p.price*Number(i.qty)))+'</td>'
+          +'<td><button class="reject-btn'+(rejected?' undo':'')+'" onclick="toggleRejectItem('+o.id+',\''+key+'\')">'+(rejected?'↩ Gjeninnfør':'✕ Stryk')+'</button></td>';
         if(isAcc){
           const pickDate=picked&&cl[key]?new Date(cl[key]).toLocaleDateString("nb-NO",{day:"numeric",month:"short"}):"";
           const iNoteR=(o.item_notes||{})[key]||"";
@@ -486,11 +503,23 @@ function buildInvoice(){
   const total=mo.reduce(function(s,o){return s+orderTotal(o);},0);
   const mName=new Date(y,m-1,1).toLocaleString("nb",{month:"long",year:"numeric"});
   const ai={};
-  mo.forEach(function(o){(o.items||[]).forEach(function(i){
-    const p=getProd(i.pid);if(!p)return;
-    if(!ai[i.pid])ai[i.pid]={name:p.name,unit:p.unit,price:p.price,qty:0};
-    ai[i.pid].qty+=Number(i.qty);
-  });});
+  mo.forEach(function(o){
+    const rej=o.rejected_items||{};
+    (o.items||[]).forEach(function(i){
+      const p=getProd(i.pid);if(!p)return;
+      if(i.splits&&i.splits.length>0){
+        i.splits.forEach(function(sp,idx){
+          if(rej[i.pid+"_"+idx])return;
+          if(!ai[i.pid])ai[i.pid]={name:p.name,unit:p.unit,price:p.price,qty:0};
+          ai[i.pid].qty+=Number(sp.qty);
+        });
+      } else {
+        if(rej[String(i.pid)])return;
+        if(!ai[i.pid])ai[i.pid]={name:p.name,unit:p.unit,price:p.price,qty:0};
+        ai[i.pid].qty+=Number(i.qty);
+      }
+    });
+  });
   let html='<div class="row" style="margin-bottom:1rem"><p class="section-label" style="margin:0">M\xe5nedlig faktura</p><div class="spacer"></div>';
   html+='<input type="month" value="'+ym+'" onchange="S.invoiceMonth=this.value;render()" style="width:auto;font-size:13px"></div>';
   if(mo.length>0){
@@ -856,6 +885,17 @@ async function acceptOrder(id){try{await db.updateOrder(id,{status:"accepted",ch
 async function rejectOrder(id){try{await db.updateOrder(id,{status:"draft"});await loadAll();showAlert("Bestilling avslått, returnert til utkast.");}catch(e){showAlert("Feil: "+e.message,"error");}}
 async function confirmDelivery(id){try{await db.updateOrder(id,{status:"delivered"});await loadAll();showAlert("Levering bekreftet!");}catch(e){showAlert("Feil: "+e.message,"error");}}
 async function deleteOrder(id){if(!confirm("Slette denne bestillingen?"))return;try{await db.deleteOrder(id);await loadAll();showAlert("Slettet.");}catch(e){showAlert("Feil: "+e.message,"error");}}
+
+async function toggleRejectItem(orderId, key){
+  const o=S.orders.find(x=>x.id===orderId);if(!o)return;
+  const rej={...o.rejected_items||{}};
+  if(rej[key]){ delete rej[key]; } else { rej[key]=true; }
+  try{
+    await db.updateOrder(orderId,{rejected_items:rej});
+    o.rejected_items=rej;
+    render();
+  }catch(e){showAlert("Feil: "+e.message,"error");}
+}
 
 async function togglePickup(orderId,key){
   const o=S.orders.find(function(x){return x.id===orderId;});if(!o)return;
