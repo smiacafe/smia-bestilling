@@ -296,15 +296,23 @@
         <div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:400">
             <input type="radio" name="delivery" id="delivery-serve" value="serveres"
-              style="width:18px;height:18px;accent-color:#2e7d32;flex-shrink:0">
+              style="width:18px;height:18px;accent-color:#2e7d32;flex-shrink:0"
+              onchange="toggleDeliveryLocation()">
             <span>
               <strong>Serveres i bygget</strong>
               <span style="display:block;font-size:0.82rem;color:#666">Vi bringer bestillingen til et sted i bygget</span>
             </span>
           </label>
+          <div id="delivery-location-wrap" style="display:none;margin-left:28px">
+            <div class="form-group" style="margin-bottom:0">
+              <label>Rom / sted <span class="req">*</span></label>
+              <input type="text" id="delivery-location" placeholder="f.eks. Møterom 2, 3. etasje">
+            </div>
+          </div>
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:400">
             <input type="radio" name="delivery" id="delivery-pickup" value="hentes"
-              style="width:18px;height:18px;accent-color:#2e7d32;flex-shrink:0">
+              style="width:18px;height:18px;accent-color:#2e7d32;flex-shrink:0"
+              onchange="toggleDeliveryLocation()">
             <span>
               <strong>Hentes i kafeen</strong>
               <span style="display:block;font-size:0.82rem;color:#666">Dere henter bestillingen selv i kafeen</span>
@@ -405,6 +413,7 @@
             <input type="number" id="qty-${p.id}" value="1" min="1" max="999"
               oninput="document.getElementById('row-${p.id}').dataset.manualQty='true'">
           </div>
+          ${isThermos ? `<div id="kanne-note-${p.id}" style="display:none;width:100%;margin-top:6px;font-size:0.82rem;color:#2e7d32;background:#f1f8f1;border:1px solid #c8e6c9;border-radius:6px;padding:6px 10px">☕ Inkluderer vann, varmt vann og te</div>` : ''}
         </div>`;
       }).join('');
 
@@ -424,11 +433,13 @@
 
   // Checkbox onchange — browser already set the correct checked state
   function updateProductRow(id) {
-    const chk     = document.getElementById('chk-' + id);
-    const row     = document.getElementById('row-' + id);
-    const qtyWrap = document.getElementById('qty-wrap-' + id);
+    const chk      = document.getElementById('chk-' + id);
+    const row      = document.getElementById('row-' + id);
+    const qtyWrap  = document.getElementById('qty-wrap-' + id);
+    const kanneNote = document.getElementById('kanne-note-' + id);
     row.classList.toggle('selected', chk.checked);
     qtyWrap.style.display = chk.checked ? 'flex' : 'none';
+    if (kanneNote) kanneNote.style.display = chk.checked ? 'block' : 'none';
     // Mark as manually interacted so auto-suggestion doesn't override
     row.dataset.manualToggle = 'true';
   }
@@ -459,6 +470,16 @@
         if (sugEl) sugEl.style.display = 'none';
       }
     });
+  }
+
+  function toggleDeliveryLocation() {
+    const isServe = document.getElementById('delivery-serve')?.checked;
+    const wrap = document.getElementById('delivery-location-wrap');
+    if (wrap) wrap.style.display = isServe ? 'block' : 'none';
+    if (!isServe) {
+      const loc = document.getElementById('delivery-location');
+      if (loc) loc.value = '';
+    }
   }
 
   // Auto-insert slashes as user types a date in dd/mm/yyyy format
@@ -512,19 +533,21 @@
     const numPeople      = parseInt(document.getElementById('num-people').value) || null;
     const allergies      = document.getElementById('allergies').value.trim();
     const note           = document.getElementById('note').value.trim();
-    const deliveryType   = document.querySelector('input[name="delivery"]:checked')?.value || '';
-    const deliveryDateRaw = document.getElementById('delivery-date').value.trim();
-    const deliveryDate    = parseDmyToIso(deliveryDateRaw);
-    const deliveryTime   = document.getElementById('delivery-time').value;
+    const deliveryType     = document.querySelector('input[name="delivery"]:checked')?.value || '';
+    const deliveryLocation = document.getElementById('delivery-location')?.value.trim() || '';
+    const deliveryDateRaw  = document.getElementById('delivery-date').value.trim();
+    const deliveryDate     = parseDmyToIso(deliveryDateRaw);
+    const deliveryTime     = document.getElementById('delivery-time').value;
 
-    if (!invoiceTo)                      { showError('Vennligst fyll inn hvem fakturaen skal sendes til.'); return; }
-    if (!invoiceAddress)                 { showError('Vennligst fyll inn fakturaadresse.'); return; }
-    if (!contactName)                    { showError('Vennligst fyll inn kontaktperson.'); return; }
-    if (!invoiceRef)                     { showError('Vennligst fyll inn fakturareferanse.'); return; }
-    if (!email || !email.includes('@'))  { showError('Vennligst oppgi en gyldig e-postadresse.'); return; }
-    if (!deliveryType)                   { showError('Vennligst velg leveringsmåte (serveres eller hentes).'); return; }
-    if (!deliveryDate)                   { showError('Vennligst oppgi en gyldig dato (dd/mm/åååå).'); return; }
-    if (!deliveryTime)                   { showError('Vennligst oppgi ønsket tidspunkt.'); return; }
+    if (!invoiceTo)                                    { showError('Vennligst fyll inn hvem fakturaen skal sendes til.'); return; }
+    if (!invoiceAddress)                               { showError('Vennligst fyll inn fakturaadresse.'); return; }
+    if (!contactName)                                  { showError('Vennligst fyll inn kontaktperson.'); return; }
+    if (!invoiceRef)                                   { showError('Vennligst fyll inn fakturareferanse.'); return; }
+    if (!email || !email.includes('@'))                { showError('Vennligst oppgi en gyldig e-postadresse.'); return; }
+    if (!deliveryType)                                 { showError('Vennligst velg leveringsmåte (serveres eller hentes).'); return; }
+    if (deliveryType === 'serveres' && !deliveryLocation) { showError('Vennligst oppgi rom / sted for levering.'); return; }
+    if (!deliveryDate)                                 { showError('Vennligst oppgi en gyldig dato (dd/mm/åååå).'); return; }
+    if (!deliveryTime)                                 { showError('Vennligst oppgi ønsket tidspunkt.'); return; }
 
     // Collect selected products
     const items = [];
@@ -551,9 +574,10 @@
         items:           items,
         allergies:       allergies || null,
         note:            note || null,
-        delivery_type:   deliveryType,
-        delivery_date:   deliveryDate,
-        delivery_time:   deliveryTime,
+        delivery_type:     deliveryType,
+        delivery_location: deliveryLocation || null,
+        delivery_date:     deliveryDate,
+        delivery_time:     deliveryTime,
         status:          'pending'
       });
 
