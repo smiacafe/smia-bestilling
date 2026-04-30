@@ -1533,8 +1533,8 @@ async function importKantineOrder(orderId) {
             for (const ri of rel) {
               const deliveredItem = itemsToInsert.find(i => i.ingredient_id === ri.ingredient_id);
               if (!deliveredItem) continue;
-              const riQty = parseFloat(ri.quantity) || 1;
-              const produced = Math.round(deliveredItem.quantity / riQty);
+              // Kantine orders are already finished products — quantity ordered = quantity produced
+              const produced = Math.round(deliveredItem.quantity);
               if (produced > 0) {
                 prodLogs.push({
                   cafe_product_id: prod.id,
