@@ -638,9 +638,106 @@ function updateAvstemming() {
 }
 
 async function buildAvfall() {
-  const logDate  = ST._wasteState['_date'] || today();
+  const logDate = ST._wasteState['_date'] || today();
 
-  // Fetch usage counts over the last 60 days to sort products by frequency
+  // ── 1. Fetch saved-dates + POS-dates for calendar (cached) ──────────────
+  let savedDates = [], posDates = [];
+  if (ST._savedDatesCache != null) {
+    savedDates = ST._savedDatesCache;
+  } else {
+    try {
+      const [wD, pD] = await Promise.all([
+        sbGet('waste_log?select=log_date&order=log_date.desc&limit=1000'),
+        sbGet('production_log?select=log_date&order=log_date.desc&limit=1000')
+      ]);
+      const dateSet = new Set([...wD.map(r => r.log_date), ...pD.map(r => r.log_date)]);
+      savedDates = [...dateSet].sort().reverse();
+      ST._savedDatesCache = savedDates;
+    } catch(e) { ST._savedDatesCache = null; }
+  }
+  if (ST._posDatesCache != null) {
+    posDates = ST._posDatesCache;
+  } else {
+    try {
+      const psD = await sbGet('daily_sales?select=sale_date&order=sale_date.desc&limit=1000');
+      const psSet = new Set(psD.map(r => r.sale_date));
+      posDates = [...psSet].sort().reverse();
+      ST._posDatesCache = posDates;
+    } catch(e) { ST._posDatesCache = null; }
+  }
+
+  // ── 2. Build calendar ────────────────────────────────────────────────────
+  const savedDateSet = new Set(savedDates);
+  const posDateSet   = new Set(posDates.filter(d => !savedDateSet.has(d)));
+  const calMonth = ST._wasteHistMonth || logDate.slice(0,7);
+  const [cy, cm] = calMonth.split('-').map(Number);
+  const prevCM = cm === 1  ? `${cy-1}-12`                         : `${cy}-${String(cm-1).padStart(2,'0')}`;
+  const nextCM = cm === 12 ? `${cy+1}-01`                         : `${cy}-${String(cm+1).padStart(2,'0')}`;
+  const mNames = ['Januar','Februar','Mars','April','Mai','Juni','Juli','August','September','Oktober','November','Desember'];
+  const daysInCM = new Date(cy, cm, 0).getDate();
+  let startDow = new Date(cy, cm-1, 1).getDay();
+  startDow = startDow === 0 ? 6 : startDow - 1;
+  const totalCells = Math.ceil((startDow + daysInCM) / 7) * 7;
+  let calRows = ''; let calDay = 1;
+  for (let cell = 0; cell < totalCells; cell++) {
+    if (cell % 7 === 0) calRows += '<tr>';
+    if (cell < startDow || calDay > daysInCM) {
+      calRows += '<td style="padding:4px"></td>';
+    } else {
+      const ds = `${cy}-${String(cm).padStart(2,'0')}-${String(calDay).padStart(2,'0')}`;
+      const hasData = savedDateSet.has(ds);
+      const isPOS   = !hasData && posDateSet.has(ds);
+      const isSel   = logDate === ds;
+      const isToday = ds === today();
+      const bg  = isSel ? '#2e7d32' : hasData ? '#e8f5e9' : isPOS ? '#ede7f6' : 'transparent';
+      const col = isSel ? 'white'   : hasData ? '#1b5e20' : isPOS ? '#6a1b9a' : isToday ? '#2e7d32' : '#bbb';
+      // Every day is clickable (so staff can enter data for any date)
+      calRows += `<td onclick="ST._wasteState={_date:'${ds}'};ST._scrollToRapport=true;renderTab()"
+        style="text-align:center;padding:5px 2px;border-radius:7px;cursor:pointer;
+               background:${bg};color:${col};font-weight:${hasData||isToday||isPOS||isSel?'700':'400'};
+               border:2px solid ${isToday&&!isSel?'#2e7d32':'transparent'}"
+        title="${hasData ? fmtDate(ds)+': Rapport lagret' : isPOS ? fmtDate(ds)+': POS-data, mangler daglig rapport' : fmtDate(ds)}">
+        <div style="font-size:0.9rem">${calDay}</div>
+        ${hasData ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>`
+                  : isPOS ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.9">POS</div>`
+                  : '<div style="font-size:0.62rem">&nbsp;</div>'}
+      </td>`;
+      calDay++;
+    }
+    if (cell % 7 === 6) calRows += '</tr>';
+  }
+  const calendarHtml = `
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card-header" style="margin-bottom:8px">
+      <span class="card-title">📅 Velg dato</span>
+      <div class="spacer"></div>
+      <button onclick="ST._wasteState={_date:'${today()}'};ST._scrollToRapport=true;renderTab()"
+        style="font-size:0.8rem;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:none;cursor:pointer">
+        I dag
+      </button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <button onclick="ST._wasteHistMonth='${prevCM}';renderTab()"
+        style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:1rem">‹</button>
+      <span style="font-weight:600;flex:1;text-align:center">${mNames[cm-1]} ${cy}</span>
+      <button onclick="ST._wasteHistMonth='${nextCM}';renderTab()"
+        style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:1rem">›</button>
+    </div>
+    <table style="width:100%;border-collapse:separate;border-spacing:2px">
+      <thead><tr>${['Ma','Ti','On','To','Fr','Lø','Sø'].map(d=>`<th style="font-size:0.72rem;text-align:center;color:var(--text2);padding:2px;font-weight:600">${d}</th>`).join('')}</tr></thead>
+      <tbody>${calRows}</tbody>
+    </table>
+    <div style="display:flex;gap:12px;margin-top:8px;font-size:0.72rem;flex-wrap:wrap;color:var(--text2)">
+      <span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#e8f5e9;border:1px solid #a5d6a7;vertical-align:middle"></span> ✓ Rapport lagret</span>
+      <span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#ede7f6;border:1px solid #ce93d8;vertical-align:middle"></span> POS – mangler rapport</span>
+      <span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:transparent;border:2px solid #2e7d32;vertical-align:middle"></span> I dag</span>
+    </div>
+    <div style="margin-top:10px;font-size:0.85rem;color:var(--text2);text-align:center">
+      Klikk på en dag for å fylle inn eller se rapport ↓
+    </div>
+  </div>`;
+
+  // ── 3. Fetch usage counts (for product sort order) ───────────────────────
   const usageCounts = {};
   try {
     const since = new Date(Date.now() - 60*24*60*60*1000).toISOString().slice(0,10);
@@ -650,12 +747,11 @@ async function buildAvfall() {
     });
   } catch(e) {}
 
-  // All products except made-to-order, sorted most-used first
   const products = ST.cafeProducts
     .filter(p => !p.made_to_order)
     .sort((a, b) => (usageCounts[b.id]||0) - (usageCounts[a.id]||0));
 
-  // Fetch today's sales for reconciliation
+  // ── 4. Fetch POS sales for selected date ─────────────────────────────────
   ST._todaySales = {};
   try {
     const sales = await sbGet(`daily_sales?sale_date=eq.${logDate}`);
@@ -665,7 +761,7 @@ async function buildAvfall() {
     });
   } catch(e) {}
 
-  // Fetch existing entries for selected date to pre-fill
+  // ── 5. Pre-fill form from saved rapport for selected date ────────────────
   if (!ST._wasteState['_loaded_' + logDate]) {
     try {
       const [wlog, plog] = await Promise.all([
@@ -683,9 +779,10 @@ async function buildAvfall() {
     } catch(e) {}
   }
 
+  // ── 6. Build rapport form ─────────────────────────────────────────────────
   const noSalesNote = Object.keys(ST._todaySales).length === 0
     ? `<div style="font-size:0.8rem;color:#856404;background:#fff9ee;border:1px solid #e6d5a0;border-radius:6px;padding:6px 10px;margin-bottom:10px">
-        ⚠️ Ingen salgsdata importert for denne datoen — "Solgt"-kolonnen viser 0. Importer POS-data under Salg for å se avstemming.
+        ⚠️ Ingen POS-salgsdata for denne datoen — «Solgt»-kolonnen viser 0.
        </div>` : '';
 
   const rows = products.length === 0
@@ -715,161 +812,31 @@ async function buildAvfall() {
         </tr>`;
       }).join('');
 
-  // History (visible to all roles)
-  let historyHtml = '';
-  {
-    const histDate = ST._wasteHistDate || today();
-    let wHist = [], pHist = [], savedDates = [], posDates = [];
-    if (ST._savedDatesCache != null) {
-      savedDates = ST._savedDatesCache;
-    } else {
-      try {
-        const [wD, pD] = await Promise.all([
-          sbGet('waste_log?select=log_date&order=log_date.desc&limit=1000'),
-          sbGet('production_log?select=log_date&order=log_date.desc&limit=1000')
-        ]);
-        const dateSet = new Set([...wD.map(r => r.log_date), ...pD.map(r => r.log_date)]);
-        savedDates = [...dateSet].sort().reverse();
-        ST._savedDatesCache = savedDates;
-      } catch(e) { ST._savedDatesCache = null; }
-    }
-    if (ST._posDatesCache != null) {
-      posDates = ST._posDatesCache;
-    } else {
-      try {
-        const psD = await sbGet('daily_sales?select=sale_date&order=sale_date.desc&limit=1000');
-        const psSet = new Set(psD.map(r => r.sale_date));
-        posDates = [...psSet].sort().reverse();
-        ST._posDatesCache = posDates;
-      } catch(e) { ST._posDatesCache = null; }
-    }
-    try {
-      [wHist, pHist] = await Promise.all([
-        sbGet(`waste_log?log_date=eq.${histDate}&order=product_name`),
-        sbGet(`production_log?log_date=eq.${histDate}&order=product_name`)
-      ]);
-    } catch(e) {}
-
-    const prodMap = {};
-    pHist.forEach(r => prodMap[r.cafe_product_id] = r.quantity_produced);
-    const wasteByProduct = {};
-    wHist.forEach(r => {
-      if (!wasteByProduct[r.cafe_product_id]) wasteByProduct[r.cafe_product_id] = { name: r.product_name, kassert:0, g2g:0, personalmat:0 };
-      if (r.waste_type==='kassert')     wasteByProduct[r.cafe_product_id].kassert += Number(r.quantity);
-      if (r.waste_type==='2good2go')    wasteByProduct[r.cafe_product_id].g2g     += Number(r.quantity);
-      if (r.waste_type==='personalmat') wasteByProduct[r.cafe_product_id].personalmat += Number(r.quantity);
-    });
-
-    const allIds = new Set([...Object.keys(prodMap), ...Object.keys(wasteByProduct)]);
-    const histSales = {};
-    try {
-      const hs = await sbGet(`daily_sales?sale_date=eq.${histDate}`);
-      hs.forEach(s => { if(s.cafe_product_id) histSales[s.cafe_product_id] = (histSales[s.cafe_product_id]||0)+s.units_sold; });
-    } catch(e) {}
-
-    // Build monthly calendar (like Salg historikk)
-    const savedDateSet = new Set(savedDates);
-    const posDateSet   = new Set(posDates.filter(d => !savedDateSet.has(d)));
-    const histMonth = ST._wasteHistMonth || histDate.slice(0,7);
-    const [hy, hm] = histMonth.split('-').map(Number);
-    const prevHM = hm === 1  ? `${hy-1}-12`                          : `${hy}-${String(hm-1).padStart(2,'0')}`;
-    const nextHM = hm === 12 ? `${hy+1}-01`                          : `${hy}-${String(hm+1).padStart(2,'0')}`;
-    const mNames = ['Januar','Februar','Mars','April','Mai','Juni','Juli','August','September','Oktober','November','Desember'];
-    const daysInHM = new Date(hy, hm, 0).getDate();
-    let startDow = new Date(hy, hm-1, 1).getDay();
-    startDow = startDow === 0 ? 6 : startDow - 1;
-    const totalCells = Math.ceil((startDow + daysInHM) / 7) * 7;
-    let calRows = ''; let calDay = 1;
-    for (let cell = 0; cell < totalCells; cell++) {
-      if (cell % 7 === 0) calRows += '<tr>';
-      if (cell < startDow || calDay > daysInHM) {
-        calRows += '<td style="padding:4px"></td>';
-      } else {
-        const ds = `${hy}-${String(hm).padStart(2,'0')}-${String(calDay).padStart(2,'0')}`;
-        const hasData = savedDateSet.has(ds);
-        const isPOS   = !hasData && posDateSet.has(ds);
-        const isSel   = histDate === ds;
-        const isToday = ds === today();
-        const bg  = isSel ? '#2e7d32' : hasData ? '#e8f5e9' : isPOS ? '#ede7f6' : 'transparent';
-        const col = isSel ? 'white'   : hasData ? '#1b5e20' : isPOS ? '#6a1b9a' : '#bbb';
-        calRows += `<td onclick="${hasData||isPOS ? `ST._wasteHistDate='${ds}';renderTab()` : ''}"
-          style="text-align:center;padding:5px 2px;border-radius:7px;cursor:${hasData||isPOS?'pointer':'default'};
-                 background:${bg};color:${col};font-weight:${hasData||isToday||isPOS?'700':'400'};
-                 border:2px solid ${isToday&&!isSel?'#2e7d32':'transparent'}"
-          title="${hasData ? fmtDate(ds)+': Rapport lagret' : isPOS ? fmtDate(ds)+': POS-data, mangler daglig rapport' : ''}">
-          <div style="font-size:0.9rem">${calDay}</div>
-          ${hasData ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>`
-                    : isPOS ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.9">POS</div>`
-                    : '<div style="font-size:0.62rem">&nbsp;</div>'}
-        </td>`;
-        calDay++;
-      }
-      if (cell % 7 === 6) calRows += '</tr>';
-    }
-    const calendarHtml = `
-      <div style="margin-bottom:14px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <button onclick="ST._wasteHistMonth='${prevHM}';renderTab()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:1rem">‹</button>
-          <span style="font-weight:600;flex:1;text-align:center">${mNames[hm-1]} ${hy}</span>
-          <button onclick="ST._wasteHistMonth='${nextHM}';renderTab()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:1rem">›</button>
-        </div>
-        <table style="width:100%;border-collapse:separate;border-spacing:2px">
-          <thead><tr>${['Ma','Ti','On','To','Fr','Lø','Sø'].map(d=>`<th style="font-size:0.72rem;text-align:center;color:var(--text2);padding:2px;font-weight:600">${d}</th>`).join('')}</tr></thead>
-          <tbody>${calRows}</tbody>
-        </table>
-        <div style="display:flex;gap:12px;margin-top:6px;font-size:0.72rem;flex-wrap:wrap">
-          <span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#e8f5e9;border:1px solid #a5d6a7;vertical-align:middle"></span> ✓ Rapport lagret</span>
-          <span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#ede7f6;border:1px solid #ce93d8;vertical-align:middle"></span> POS – mangler rapport</span>
-          <span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:transparent;border:1px solid #ddd;vertical-align:middle"></span> Ingen data</span>
-        </div>
-        ${savedDates.length === 0 ? '<div class="empty" style="font-size:0.85rem;margin-top:8px">Ingen lagrede rapporter ennå.</div>' : ''}
-      </div>`;
-
-    historyHtml = `
-    <div class="card" style="margin-top:1.25rem">
-      <div class="card-header">
-        <span class="card-title">Historikk</span>
-        <div class="spacer"></div>
-        <span style="font-size:0.8rem;color:var(--text2)">Solgt = POS-data &nbsp;|&nbsp; Prod./Svinn = lagret rapport</span>
-      </div>
-      ${calendarHtml}
-      ${allIds.size === 0 ? `<div class="empty">Ingen lagret daglig rapport for ${fmtDate(histDate)} — klikk på en grønn dato i kalenderen, eller fyll ut rapporten øverst og lagre.</div>` : `
-      <table>
-        <thead><tr><th>Produkt</th><th style="text-align:center">Prod.</th><th style="text-align:center">Solgt</th><th style="text-align:center">🗑️ Svinn</th><th style="text-align:center">🟢 2G2G</th><th style="text-align:center">🍽️ Personalmat</th><th style="text-align:center">Uforklart</th></tr></thead>
-        <tbody>
-          ${[...allIds].map(id => {
-            const w = wasteByProduct[id] || { name: products.find(p=>p.id==id)?.name||id, kassert:0, g2g:0, personalmat:0 };
-            const prod = prodMap[id] || 0;
-            const sold = histSales[id] || 0;
-            const uforklart = prod - sold - w.kassert - w.g2g - w.personalmat;
-            const uCol = uforklart === 0 ? '#3B6D11' : uforklart > 0 ? '#856404' : '#A32D2D';
-            return `<tr>
-              <td>${esc(w.name)}</td>
-              <td style="text-align:center">${fmtN(prod)}</td>
-              <td style="text-align:center">${fmtN(sold)}</td>
-              <td style="text-align:center">${fmtN(w.kassert)}</td>
-              <td style="text-align:center">${fmtN(w.g2g)}</td>
-              <td style="text-align:center">${fmtN(w.personalmat)}</td>
-              <td style="text-align:center;font-weight:700;color:${uCol}">${uforklart===0?'✓ 0':(uforklart>0?'+':'')+fmtN(uforklart)}</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>`}
-    </div>`;
-  }
-
   const isSaved = ST._wasteState['_has_data_' + logDate] || (ST._savedDates && ST._savedDates.has(logDate));
   const savedBadge = isSaved
     ? `<span style="background:#e8f5e9;color:#2e7d32;border:1px solid #b2dfbc;border-radius:6px;padding:3px 10px;font-size:0.82rem;font-weight:600">✅ Lagret</span>`
     : `<span style="background:#f5f5f5;color:#aaa;border:1px solid #e0e0e0;border-radius:6px;padding:3px 10px;font-size:0.82rem">Ikke lagret</span>`;
 
+  // Prev / next day navigation
+  const prevDay = new Date(logDate); prevDay.setDate(prevDay.getDate() - 1);
+  const nextDay = new Date(logDate); nextDay.setDate(nextDay.getDate() + 1);
+  const prevDs  = prevDay.toISOString().slice(0,10);
+  const nextDs  = nextDay.toISOString().slice(0,10);
+
   return `
-  <div class="card">
+  ${calendarHtml}
+  <div class="card" id="daglig-rapport-form">
     <div class="card-header">
       <span class="card-title">📋 Daglig rapport</span>
       <div class="spacer"></div>
       ${savedBadge}
-      ${mkDatePicker('waste-date', logDate, "ST._wasteState={};ST._wasteState['_date']=this.value;renderTab();", 'width:150px;margin-left:8px')}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <button onclick="ST._wasteState={_date:'${prevDs}'};renderTab()"
+        style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:1rem" title="Forrige dag">‹</button>
+      <span style="font-weight:700;font-size:1.1rem;flex:1;text-align:center">${fmtDate(logDate)}</span>
+      <button onclick="ST._wasteState={_date:'${nextDs}'};renderTab()"
+        style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:1rem" title="Neste dag">›</button>
     </div>
     ${noSalesNote}
     <div style="overflow-x:auto">
@@ -878,7 +845,7 @@ async function buildAvfall() {
           <tr>
             <th>Produkt</th>
             <th style="text-align:center">🔵 Produsert</th>
-            <th style="text-align:center;color:var(--text2)">Solgt</th>
+            <th style="text-align:center;color:var(--text2)">Solgt (POS)</th>
             <th style="text-align:center">🗑️ Svinn</th>
             <th style="text-align:center">🟢 2Good2Go</th>
             <th style="text-align:center">🍽️ Personalmat</th>
@@ -892,13 +859,11 @@ async function buildAvfall() {
       <button class="btn btn-primary" onclick="saveDagligRapport()">💾 Lagre rapport</button>
       <span style="font-size:0.8rem;color:var(--text2)">Du kan lagre flere ganger — siste registrering gjelder</span>
     </div>
-  </div>
-  ${historyHtml}`;
+  </div>`;
 }
 
 async function saveDagligRapport() {
-  const dateEl = el('waste-date');
-  const logDate = dateEl ? dateEl.value : today();
+  const logDate = ST._wasteState['_date'] || today();
   const products = ST.cafeProducts.filter(p => p.active);
 
   const wasteRows = [];
@@ -5033,7 +4998,14 @@ async function refreshLagerStatus() {
 //  BIND TAB EVENTS
 // =============================================================
 function bindTabEvents() {
-  // Nothing needed — all handlers are inline onclick
+  // Scroll to rapport form when a calendar date is clicked
+  if (ST._scrollToRapport) {
+    ST._scrollToRapport = false;
+    requestAnimationFrame(() => {
+      const form = document.getElementById('daglig-rapport-form');
+      if (form) form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
 }
 
 // =============================================================
