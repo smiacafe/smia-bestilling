@@ -2093,12 +2093,12 @@ function buildSalgImport() {
     <div class="card-header"><span class="card-title">Importer salg fra Excel (POS)</span></div>
     <div class="form-row" style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border)">
       <label style="font-weight:600;margin-bottom:6px;display:block">
-        Hvilken dato gjelder denne filen?
+        Dato (leses automatisk fra filnavnet — kan overstyres)
       </label>
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        ${mkDatePicker('salg-date', selDate, "ST._salgDate=this.value;document.getElementById('salg-date-preview').textContent=fmtDate(this.value);", 'width:180px;font-size:1rem;padding:8px 10px')}
+        ${mkDatePicker('salg-date', selDate, "ST._salgDate=this.value;ST._salgDateFromFile=false;document.getElementById('salg-date-preview').textContent=fmtDate(this.value);", 'width:180px;font-size:1rem;padding:8px 10px')}
         <strong id="salg-date-preview" style="font-size:1rem">${fmtDate(selDate)}</strong>
-        <span style="font-size:0.82rem;color:var(--text2)">Velg dato før du laster opp filen — POS-eksporten inneholder ingen dato</span>
+        <span style="font-size:0.82rem;color:var(--text2)">Datoen leses automatisk fra filnavnet når du laster opp — du kan endre den her om nødvendig</span>
       </div>
     </div>
     <div class="file-drop" id="file-drop-zone" onclick="el('salg-file').click()"
@@ -2168,9 +2168,12 @@ function buildSalgPreview() {
       <span class="card-title">Forhåndsvisning (${data.length} rader)</span>
       ${needsMapping.length > 0 ? `<span class="badge" style="background:#fff3cd;color:#856404">⚠️ ${needsMapping.length} trenger kobling</span>` : `<span class="badge" style="background:#d4edda;color:#155724">✓ Alle matchet</span>`}
       <div class="spacer"></div>
-      <span style="font-size:0.85rem;color:var(--text2);display:flex;align-items:center;gap:6px">Dato:
-        ${mkDatePicker('salg-date2', ST._salgDate||today(), "ST._salgDate=this.value;document.getElementById('salg-date-preview2').textContent=fmtDate(this.value);", 'width:150px;margin-left:4px')}
+      <span style="font-size:0.85rem;color:var(--text2);display:flex;align-items:center;gap:6px;flex-wrap:wrap">Dato:
+        ${mkDatePicker('salg-date2', ST._salgDate||today(), "ST._salgDate=this.value;ST._salgDateFromFile=false;document.getElementById('salg-date-preview2').textContent=fmtDate(this.value);", 'width:150px;margin-left:4px')}
         <strong id="salg-date-preview2">${fmtDate(ST._salgDate||today())}</strong>
+        ${ST._salgDateFromFile
+          ? `<span style="background:#e8f5e9;color:#2e7d32;border:1px solid #b2dfbc;border-radius:5px;padding:2px 7px;font-size:0.75rem;font-weight:600">📂 Lest fra filnavn</span>`
+          : `<span style="background:#fff3cd;color:#856404;border:1px solid #ffc107;border-radius:5px;padding:2px 7px;font-size:0.75rem;font-weight:600">⚠️ Sjekk dato</span>`}
       </span>
       <button class="btn btn-primary" onclick="importSalg()" ${canImport?'':'disabled'} title="${canImport?'':'Koble alle umatchede produkter først'}">📥 Importer salg</button>
       <button class="btn" onclick="cancelSalgImport()" title="Avbryt og fjern fil">✕ Avbryt</button>
@@ -2186,9 +2189,10 @@ function buildSalgPreview() {
 }
 
 function cancelSalgImport() {
-  ST._salgPreviewData = null;
-  ST._salgPending     = {};
-  ST._salgPendingHusk = {};
+  ST._salgPreviewData  = null;
+  ST._salgPending      = {};
+  ST._salgPendingHusk  = {};
+  ST._salgDateFromFile = false;
   // Reset the file input so the same file can be re-selected later
   const fileInput = document.getElementById('salg-file');
   if (fileInput) fileInput.value = '';
@@ -2218,6 +2222,17 @@ function handleFileDrop(event) {
 
 function handleSalgFile(file) {
   if (!file) return;
+
+  // Auto-detect date from filename, e.g. "Salg per produkt_05032026-05032026.xlsx"
+  const dateMatch = file.name.match(/_(\d{2})(\d{2})(\d{4})/);
+  if (dateMatch) {
+    const [, dd, mm, yyyy] = dateMatch;
+    ST._salgDate         = `${yyyy}-${mm}-${dd}`;
+    ST._salgDateFromFile = true;
+  } else {
+    ST._salgDateFromFile = false;
+  }
+
   const reader = new FileReader();
   reader.onload = e => {
     try {
@@ -2301,9 +2316,10 @@ async function importSalg() {
     await sbDelete(`daily_sales?sale_date=eq.${saleDate}`);
     await sbPost('daily_sales', rows);
     const newAliasCount = aliasesToSave.length;
-    ST._salgPreviewData = null;
-    ST._salgPending     = {};
-    ST._salgPendingHusk = {};
+    ST._salgPreviewData  = null;
+    ST._salgPending      = {};
+    ST._salgPendingHusk  = {};
+    ST._salgDateFromFile = false;
     showAlert(`${rows.length} salgslinjer importert${newAliasCount > 0 ? ` · ${newAliasCount} ny(e) mappinger lagret` : ''}!`);
     await renderTab();
   } catch(e) {
