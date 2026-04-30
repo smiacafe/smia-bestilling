@@ -551,7 +551,7 @@ function buildInvoice(){
           });
         } else {
           if(rej[String(i.pid)])return;
-          html+='<div class="inv-line" style="font-size:12px"><span>'+p.name+' &times; '+fmtQty(i.qty)+'&nbsp;'+p.unit+(i.note?' ('+i.note+')')+'</span><span>'+fmt(p.price*Number(i.qty))+'</span></div>';
+          html+='<div class="inv-line" style="font-size:12px"><span>'+p.name+' &times; '+fmtQty(i.qty)+'&nbsp;'+p.unit+(i.note?' ('+i.note+')':'')+'</span><span>'+fmt(p.price*Number(i.qty))+'</span></div>';
         }
       });
     });
