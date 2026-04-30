@@ -757,24 +757,64 @@ async function buildAvfall() {
       hs.forEach(s => { if(s.cafe_product_id) histSales[s.cafe_product_id] = (histSales[s.cafe_product_id]||0)+s.units_sold; });
     } catch(e) {}
 
-    const dateChipsHtml = savedDates.length > 0 ? `
-      <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px">
-        ${savedDates.map(d => {
-          const isActive = d === histDate;
-          return `<button onmousedown="ST._wasteHistDate='${d}';renderTab()"
-            style="background:${isActive ? 'var(--accent)' : '#e8f4ea'};color:${isActive ? 'white' : '#2e7d32'};border:1px solid ${isActive ? 'var(--accent)' : '#b2dfbc'};border-radius:14px;padding:3px 10px;font-size:0.78rem;cursor:pointer;font-weight:${isActive ? '600' : '400'}">${d}</button>`;
-        }).join('')}
-      </div>` : '<div class="empty" style="font-size:0.85rem">Ingen lagrede rapporter ennå.</div>';
+    // Build monthly calendar (like Salg historikk)
+    const savedDateSet = new Set(savedDates);
+    const histMonth = ST._wasteHistMonth || histDate.slice(0,7);
+    const [hy, hm] = histMonth.split('-').map(Number);
+    const prevHM = hm === 1  ? `${hy-1}-12`                          : `${hy}-${String(hm-1).padStart(2,'0')}`;
+    const nextHM = hm === 12 ? `${hy+1}-01`                          : `${hy}-${String(hm+1).padStart(2,'0')}`;
+    const mNames = ['Januar','Februar','Mars','April','Mai','Juni','Juli','August','September','Oktober','November','Desember'];
+    const daysInHM = new Date(hy, hm, 0).getDate();
+    let startDow = new Date(hy, hm-1, 1).getDay();
+    startDow = startDow === 0 ? 6 : startDow - 1;
+    const totalCells = Math.ceil((startDow + daysInHM) / 7) * 7;
+    let calRows = ''; let calDay = 1;
+    for (let cell = 0; cell < totalCells; cell++) {
+      if (cell % 7 === 0) calRows += '<tr>';
+      if (cell < startDow || calDay > daysInHM) {
+        calRows += '<td style="padding:4px"></td>';
+      } else {
+        const ds = `${hy}-${String(hm).padStart(2,'0')}-${String(calDay).padStart(2,'0')}`;
+        const hasData = savedDateSet.has(ds);
+        const isSel   = histDate === ds;
+        const isToday = ds === today();
+        const bg  = isSel ? '#2e7d32' : hasData ? '#e8f5e9' : 'transparent';
+        const col = isSel ? 'white'   : hasData ? '#1b5e20' : '#bbb';
+        calRows += `<td onclick="${hasData ? `ST._wasteHistDate='${ds}';renderTab()` : ''}"
+          style="text-align:center;padding:5px 2px;border-radius:7px;cursor:${hasData?'pointer':'default'};
+                 background:${bg};color:${col};font-weight:${hasData||isToday?'700':'400'};
+                 border:2px solid ${isToday&&!isSel?'#2e7d32':'transparent'}"
+          title="${hasData ? fmtDate(ds)+': Rapport lagret' : ''}">
+          <div style="font-size:0.9rem">${calDay}</div>
+          ${hasData ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>` : '<div style="font-size:0.62rem">&nbsp;</div>'}
+        </td>`;
+        calDay++;
+      }
+      if (cell % 7 === 6) calRows += '</tr>';
+    }
+    const calendarHtml = `
+      <div style="margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <button onclick="ST._wasteHistMonth='${prevHM}';renderTab()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:1rem">‹</button>
+          <span style="font-weight:600;flex:1;text-align:center">${mNames[hm-1]} ${hy}</span>
+          <button onclick="ST._wasteHistMonth='${nextHM}';renderTab()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:1rem">›</button>
+        </div>
+        <table style="width:100%;border-collapse:separate;border-spacing:2px">
+          <thead><tr>${['Ma','Ti','On','To','Fr','Lø','Sø'].map(d=>`<th style="font-size:0.72rem;text-align:center;color:var(--text2);padding:2px;font-weight:600">${d}</th>`).join('')}</tr></thead>
+          <tbody>${calRows}</tbody>
+        </table>
+        ${savedDates.length === 0 ? '<div class="empty" style="font-size:0.85rem;margin-top:8px">Ingen lagrede rapporter ennå.</div>' : ''}
+      </div>`;
 
     historyHtml = `
     <div class="card" style="margin-top:1.25rem">
       <div class="card-header">
         <span class="card-title">Historikk</span>
         <div class="spacer"></div>
-        ${mkDatePicker('waste-hist-date', histDate, 'ST._wasteHistDate=this.value;renderTab();', 'width:150px')}
+        <span style="font-size:0.8rem;color:var(--text2)">Solgt = POS-data &nbsp;|&nbsp; Prod./Svinn = lagret rapport</span>
       </div>
-      ${dateChipsHtml}
-      ${allIds.size === 0 ? '<div class="empty">Ingen registreringer for valgt dato</div>' : `
+      ${calendarHtml}
+      ${allIds.size === 0 ? `<div class="empty">Ingen lagret daglig rapport for ${fmtDate(histDate)} — klikk på en grønn dato i kalenderen, eller fyll ut rapporten øverst og lagre.</div>` : `
       <table>
         <thead><tr><th>Produkt</th><th style="text-align:center">Prod.</th><th style="text-align:center">Solgt</th><th style="text-align:center">🗑️ Svinn</th><th style="text-align:center">🟢 2G2G</th><th style="text-align:center">🍽️ Personalmat</th><th style="text-align:center">Uforklart</th></tr></thead>
         <tbody>
