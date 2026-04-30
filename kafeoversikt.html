@@ -1534,7 +1534,7 @@ async function importKantineOrder(orderId) {
               const deliveredItem = itemsToInsert.find(i => i.ingredient_id === ri.ingredient_id);
               if (!deliveredItem) continue;
               // Kantine orders are already finished products — quantity ordered = quantity produced
-              const produced = Math.round(deliveredItem.quantity);
+              const produced = deliveredItem.quantity;
               if (produced > 0) {
                 prodLogs.push({
                   cafe_product_id: prod.id,
