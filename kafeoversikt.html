@@ -719,7 +719,7 @@ async function buildAvfall() {
   let historyHtml = '';
   {
     const histDate = ST._wasteHistDate || today();
-    let wHist = [], pHist = [], savedDates = [];
+    let wHist = [], pHist = [], savedDates = [], posDates = [];
     if (ST._savedDatesCache != null) {
       savedDates = ST._savedDatesCache;
     } else {
@@ -732,6 +732,16 @@ async function buildAvfall() {
         savedDates = [...dateSet].sort().reverse();
         ST._savedDatesCache = savedDates;
       } catch(e) { ST._savedDatesCache = null; }
+    }
+    if (ST._posDatesCache != null) {
+      posDates = ST._posDatesCache;
+    } else {
+      try {
+        const psD = await sbGet('daily_sales?select=sale_date&order=sale_date.desc&limit=1000');
+        const psSet = new Set(psD.map(r => r.sale_date));
+        posDates = [...psSet].sort().reverse();
+        ST._posDatesCache = posDates;
+      } catch(e) { ST._posDatesCache = null; }
     }
     try {
       [wHist, pHist] = await Promise.all([
@@ -759,6 +769,7 @@ async function buildAvfall() {
 
     // Build monthly calendar (like Salg historikk)
     const savedDateSet = new Set(savedDates);
+    const posDateSet   = new Set(posDates.filter(d => !savedDateSet.has(d)));
     const histMonth = ST._wasteHistMonth || histDate.slice(0,7);
     const [hy, hm] = histMonth.split('-').map(Number);
     const prevHM = hm === 1  ? `${hy-1}-12`                          : `${hy}-${String(hm-1).padStart(2,'0')}`;
@@ -776,17 +787,20 @@ async function buildAvfall() {
       } else {
         const ds = `${hy}-${String(hm).padStart(2,'0')}-${String(calDay).padStart(2,'0')}`;
         const hasData = savedDateSet.has(ds);
+        const isPOS   = !hasData && posDateSet.has(ds);
         const isSel   = histDate === ds;
         const isToday = ds === today();
-        const bg  = isSel ? '#2e7d32' : hasData ? '#e8f5e9' : 'transparent';
-        const col = isSel ? 'white'   : hasData ? '#1b5e20' : '#bbb';
-        calRows += `<td onclick="${hasData ? `ST._wasteHistDate='${ds}';renderTab()` : ''}"
-          style="text-align:center;padding:5px 2px;border-radius:7px;cursor:${hasData?'pointer':'default'};
-                 background:${bg};color:${col};font-weight:${hasData||isToday?'700':'400'};
+        const bg  = isSel ? '#2e7d32' : hasData ? '#e8f5e9' : isPOS ? '#ede7f6' : 'transparent';
+        const col = isSel ? 'white'   : hasData ? '#1b5e20' : isPOS ? '#6a1b9a' : '#bbb';
+        calRows += `<td onclick="${hasData||isPOS ? `ST._wasteHistDate='${ds}';renderTab()` : ''}"
+          style="text-align:center;padding:5px 2px;border-radius:7px;cursor:${hasData||isPOS?'pointer':'default'};
+                 background:${bg};color:${col};font-weight:${hasData||isToday||isPOS?'700':'400'};
                  border:2px solid ${isToday&&!isSel?'#2e7d32':'transparent'}"
-          title="${hasData ? fmtDate(ds)+': Rapport lagret' : ''}">
+          title="${hasData ? fmtDate(ds)+': Rapport lagret' : isPOS ? fmtDate(ds)+': POS-data, mangler daglig rapport' : ''}">
           <div style="font-size:0.9rem">${calDay}</div>
-          ${hasData ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>` : '<div style="font-size:0.62rem">&nbsp;</div>'}
+          ${hasData ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>`
+                    : isPOS ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.9">POS</div>`
+                    : '<div style="font-size:0.62rem">&nbsp;</div>'}
         </td>`;
         calDay++;
       }
@@ -803,6 +817,11 @@ async function buildAvfall() {
           <thead><tr>${['Ma','Ti','On','To','Fr','Lø','Sø'].map(d=>`<th style="font-size:0.72rem;text-align:center;color:var(--text2);padding:2px;font-weight:600">${d}</th>`).join('')}</tr></thead>
           <tbody>${calRows}</tbody>
         </table>
+        <div style="display:flex;gap:12px;margin-top:6px;font-size:0.72rem;flex-wrap:wrap">
+          <span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#e8f5e9;border:1px solid #a5d6a7;vertical-align:middle"></span> ✓ Rapport lagret</span>
+          <span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#ede7f6;border:1px solid #ce93d8;vertical-align:middle"></span> POS – mangler rapport</span>
+          <span><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:transparent;border:1px solid #ddd;vertical-align:middle"></span> Ingen data</span>
+        </div>
         ${savedDates.length === 0 ? '<div class="empty" style="font-size:0.85rem;margin-top:8px">Ingen lagrede rapporter ennå.</div>' : ''}
       </div>`;
 
@@ -917,7 +936,8 @@ async function saveDagligRapport() {
     ST._wasteState['_has_data_' + logDate] = true;
     if (!ST._savedDates) ST._savedDates = new Set();
     ST._savedDates.add(logDate);
-    ST._savedDatesCache = null; // invalidate chips cache
+    ST._savedDatesCache = null; // invalidate date cache
+    ST._posDatesCache   = null; // invalidate POS date cache
     showAlert('Daglig rapport lagret!');
     await renderTab();
   } catch(e) {
