@@ -720,18 +720,18 @@ async function buildAvfall() {
   {
     const histDate = ST._wasteHistDate || today();
     let wHist = [], pHist = [], savedDates = [];
-    if (ST._savedDatesCache) {
+    if (ST._savedDatesCache != null) {
       savedDates = ST._savedDatesCache;
     } else {
       try {
         const [wD, pD] = await Promise.all([
-          sbGet('waste_log?select=log_date&order=log_date.desc&limit=2000'),
-          sbGet('production_log?select=log_date&order=log_date.desc&limit=2000')
+          sbGet('waste_log?select=log_date&order=log_date.desc&limit=1000'),
+          sbGet('production_log?select=log_date&order=log_date.desc&limit=1000')
         ]);
         const dateSet = new Set([...wD.map(r => r.log_date), ...pD.map(r => r.log_date)]);
-        savedDates = [...dateSet].sort().reverse().slice(0, 60);
+        savedDates = [...dateSet].sort().reverse();
         ST._savedDatesCache = savedDates;
-      } catch(e) {}
+      } catch(e) { ST._savedDatesCache = null; }
     }
     try {
       [wHist, pHist] = await Promise.all([
