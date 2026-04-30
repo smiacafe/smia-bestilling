@@ -547,7 +547,7 @@ function buildInvoice(){
         if(i.splits&&i.splits.length>0){
           i.splits.forEach(function(sp,idx){
             if(rej[i.pid+"_"+idx])return;
-            html+='<div class="inv-line" style="font-size:12px"><span>'+p.name+(sp.day?' ('+sp.day+')')+'  &times; '+fmtQty(sp.qty)+'&nbsp;'+p.unit+(i.note?' ('+i.note+')')+'</span><span>'+fmt(p.price*Number(sp.qty))+'</span></div>';
+            html+='<div class="inv-line" style="font-size:12px"><span>'+p.name+(sp.day?' ('+sp.day+')':'')+'  &times; '+fmtQty(sp.qty)+'&nbsp;'+p.unit+(i.note?' ('+i.note+')':'')+'</span><span>'+fmt(p.price*Number(sp.qty))+'</span></div>';
           });
         } else {
           if(rej[String(i.pid)])return;
