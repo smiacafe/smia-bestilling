@@ -689,13 +689,17 @@ async function buildAvfall() {
       const isPOS   = !hasData && posDateSet.has(ds);
       const isSel   = logDate === ds;
       const isToday = ds === today();
-      const bg  = isSel ? '#2e7d32' : hasData ? '#e8f5e9' : isPOS ? '#ede7f6' : 'transparent';
-      const col = isSel ? 'white'   : hasData ? '#1b5e20' : isPOS ? '#6a1b9a' : isToday ? '#2e7d32' : '#bbb';
+      // Background always reflects data status — selection/today shown via border ring only
+      const bg  = hasData ? '#e8f5e9' : isPOS ? '#ede7f6' : 'transparent';
+      const col = hasData ? '#1b5e20' : isPOS ? '#6a1b9a' : isToday ? '#1565c0' : '#bbb';
+      const border = isSel ? '3px solid #2e7d32'        // selected → green ring
+                   : isToday ? '3px solid #1565c0'       // today    → blue ring
+                   : '2px solid transparent';
       // Every day is clickable (so staff can enter data for any date)
       calRows += `<td onclick="ST._wasteState={_date:'${ds}'};ST._scrollToRapport=true;renderTab()"
         style="text-align:center;padding:5px 2px;border-radius:7px;cursor:pointer;
                background:${bg};color:${col};font-weight:${hasData||isToday||isPOS||isSel?'700':'400'};
-               border:2px solid ${isToday&&!isSel?'#2e7d32':'transparent'}"
+               border:${border};box-sizing:border-box"
         title="${hasData ? fmtDate(ds)+': Rapport lagret' : isPOS ? fmtDate(ds)+': POS-data, mangler daglig rapport' : fmtDate(ds)}">
         <div style="font-size:0.9rem">${calDay}</div>
         ${hasData ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>`
@@ -730,7 +734,8 @@ async function buildAvfall() {
     <div style="display:flex;gap:12px;margin-top:8px;font-size:0.72rem;flex-wrap:wrap;color:var(--text2)">
       <span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#e8f5e9;border:1px solid #a5d6a7;vertical-align:middle"></span> ✓ Rapport lagret</span>
       <span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#ede7f6;border:1px solid #ce93d8;vertical-align:middle"></span> POS – mangler rapport</span>
-      <span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:transparent;border:2px solid #2e7d32;vertical-align:middle"></span> I dag</span>
+      <span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:transparent;border:3px solid #2e7d32;vertical-align:middle"></span> Valgt dato</span>
+      <span><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:transparent;border:3px solid #1565c0;vertical-align:middle"></span> I dag</span>
     </div>
     <div style="margin-top:10px;font-size:0.85rem;color:var(--text2);text-align:center">
       Klikk på en dag for å fylle inn eller se rapport ↓
