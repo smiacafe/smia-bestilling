@@ -2297,6 +2297,8 @@ async function importSalg() {
       rows.push({ sale_date: saleDate, product_name: r.productName, units_sold: r.unitsSold, cafe_product_id: cafeProdId || null });
     }
 
+    // Delete any existing rows for this date first to prevent duplicates
+    await sbDelete(`daily_sales?sale_date=eq.${saleDate}`);
     await sbPost('daily_sales', rows);
     const newAliasCount = aliasesToSave.length;
     ST._salgPreviewData = null;
