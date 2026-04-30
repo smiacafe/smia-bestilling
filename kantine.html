@@ -543,7 +543,16 @@ function buildInvoice(){
       html+='<p style="font-size:12px;font-weight:600;color:var(--text2);margin:10px 0 4px">Bestilling #'+o.id+' \u2014 '+weekLabel(o.week)+'</p>';
       (o.items||[]).forEach(function(i){
         const p=getProd(i.pid);if(!p)return;
-        html+='<div class="inv-line" style="font-size:12px"><span>'+p.name+' &times; '+fmtQty(i.qty)+(i.note?" ("+i.note+")":'')+'</span><span>'+fmt(p.price*Number(i.qty))+'</span></div>';
+        const rej=o.rejected_items||{};
+        if(i.splits&&i.splits.length>0){
+          i.splits.forEach(function(sp,idx){
+            if(rej[i.pid+"_"+idx])return;
+            html+='<div class="inv-line" style="font-size:12px"><span>'+p.name+(sp.day?' ('+sp.day+')')+'  &times; '+fmtQty(sp.qty)+'&nbsp;'+p.unit+(i.note?' ('+i.note+')')+'</span><span>'+fmt(p.price*Number(sp.qty))+'</span></div>';
+          });
+        } else {
+          if(rej[String(i.pid)])return;
+          html+='<div class="inv-line" style="font-size:12px"><span>'+p.name+' &times; '+fmtQty(i.qty)+'&nbsp;'+p.unit+(i.note?' ('+i.note+')')+'</span><span>'+fmt(p.price*Number(i.qty))+'</span></div>';
+        }
       });
     });
     html+='</div>';
@@ -843,10 +852,9 @@ async function saveOrder(asDraft){
     let item=S.draft.items.find(function(i){return i.pid===p.id;});
     // Only count splits that have actual content
     const validSplits=splits.filter(function(sp){return sp.qty>0||sp.day.length>0;});
-    // If there are splits, total qty = direct qty (unsplit base) + sum of splits
-    // This way adding a split row for extra days ADDS to the base, not replaces it
+    // If there are splits, total qty = sum of splits (splits replace the base qty)
     const splitsTotal=validSplits.reduce(function(s,sp){return s+sp.qty;},0);
-    const finalQty=validSplits.length>0?(qty+splitsTotal):qty;
+    const finalQty=validSplits.length>0?splitsTotal:qty;
     if(finalQty>0){
       if(!item){item={pid:p.id,qty:0,note:"",splits:[]};S.draft.items.push(item);}
       item.qty=finalQty;item.note=note;item.splits=validSplits;
