@@ -1331,7 +1331,8 @@ async function savePurchase(supplierType) {
       supplier_type: supplierType,
       supplier_name: supplierName || supplierType,
       total_amount: total,
-      source: 'manual'
+      source: 'manual',
+      created_by: ST.role
     }]);
 
     // Match or create ingredients
@@ -1646,10 +1647,13 @@ async function buildInnkjopHistorikk() {
         </td>
       </tr>` : '';
 
+    const staffBadge = r.created_by === 'staff'
+      ? `<span style="background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;border-radius:4px;padding:1px 6px;font-size:0.72rem;font-weight:600;margin-left:5px">Ansatt</span>`
+      : '';
     return `
       <tr style="cursor:pointer" onclick="toggleHistDetail(${r.id})">
         <td>${esc(r.receipt_date)}</td>
-        <td>${esc(r.supplier_name || r.supplier_type)}</td>
+        <td>${esc(r.supplier_name || r.supplier_type)}${staffBadge}</td>
         <td><span class="badge badge-${r.supplier_type}">${esc(r.supplier_type)}</span></td>
         <td style="color:var(--text2)">${items.length} varer</td>
         <td style="text-align:right;font-weight:600">${fmt(r.total_amount)}</td>
