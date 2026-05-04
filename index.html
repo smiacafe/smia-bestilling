@@ -244,9 +244,9 @@
 
   <!-- Success screen (hidden until submit) -->
   <div class="card success-screen" id="success-screen">
-    <div class="icon">✅</div>
-    <h2>Forespørsel sendt!</h2>
-    <p>Takk! Vi har mottatt forespørselen din og kommer tilbake til deg så snart som mulig med en bekreftelse.</p>
+    <div class="icon" id="success-icon">✅</div>
+    <h2 id="success-title">Forespørsel sendt!</h2>
+    <p id="success-msg">Takk! Vi har mottatt forespørselen din og kommer tilbake til deg så snart som mulig med en bekreftelse.</p>
   </div>
 
   <!-- Main form -->
@@ -318,6 +318,18 @@
               <span style="display:block;font-size:0.82rem;color:#666">Dere henter bestillingen selv i kafeen</span>
             </span>
           </label>
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:400">
+            <input type="radio" name="delivery" id="delivery-table" value="bord"
+              style="width:18px;height:18px;accent-color:#2e7d32;flex-shrink:0"
+              onchange="toggleDeliveryLocation()">
+            <span>
+              <strong>🪑 Bestille bord i kafeen</strong>
+              <span style="display:block;font-size:0.82rem;color:#666">Spis i kafeen — menyen velges ved ankomst og faktureres i etterkant</span>
+            </span>
+          </label>
+          <div id="table-note" style="display:none;margin-left:28px;background:#f0f6ff;border:1px solid #b3d1f5;border-radius:8px;padding:10px 12px;font-size:0.85rem;color:#1a4a7a">
+            ℹ️ Du trenger ikke velge mat nå. Vi bekrefter bordreservasjonen, og dere bestiller fra menyen når dere ankommer.
+          </div>
         </div>
       </div>
       <div class="grid2">
@@ -328,14 +340,14 @@
             oninput="autoFormatDate(this)">
         </div>
         <div class="form-group">
-          <label>Ønsket tidspunkt <span class="req">*</span></label>
+          <label id="time-label">Ønsket tidspunkt <span class="req">*</span></label>
           <input type="time" id="delivery-time" style="width:100%">
-          <p class="hint">Når skal det være klart / serveres?</p>
+          <p class="hint" id="time-hint">Når skal det være klart / serveres?</p>
         </div>
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="products-card">
       <h2>🛒 Velg produkter</h2>
       <div class="product-list" id="product-list">
         <div class="loading-products">Laster produkter…</div>
@@ -534,12 +546,26 @@
 
   function toggleDeliveryLocation() {
     const isServe = document.getElementById('delivery-serve')?.checked;
-    const wrap = document.getElementById('delivery-location-wrap');
+    const isTable = document.getElementById('delivery-table')?.checked;
+    const wrap         = document.getElementById('delivery-location-wrap');
+    const productsCard = document.getElementById('products-card');
+    const tableNote    = document.getElementById('table-note');
+    const timeHint     = document.getElementById('time-hint');
+    const timeLabel    = document.getElementById('time-label');
+
     if (wrap) wrap.style.display = isServe ? 'block' : 'none';
     if (!isServe) {
       const loc = document.getElementById('delivery-location');
       if (loc) loc.value = '';
     }
+    if (productsCard) productsCard.style.display = isTable ? 'none' : 'block';
+    if (tableNote)    tableNote.style.display    = isTable ? 'block' : 'none';
+    if (timeHint)     timeHint.textContent = isTable
+      ? 'Planlagt ankomsttidspunkt'
+      : 'Når skal det være klart / serveres?';
+    if (timeLabel)    timeLabel.innerHTML = isTable
+      ? 'Planlagt ankomsttid <span class="req">*</span>'
+      : 'Ønsket tidspunkt <span class="req">*</span>';
   }
 
   // Auto-insert slashes as user types a date in dd/mm/yyyy format
@@ -604,19 +630,22 @@
     if (!contactName)                                  { showError('Vennligst fyll inn kontaktperson.'); return; }
     if (!invoiceRef)                                   { showError('Vennligst fyll inn fakturareferanse.'); return; }
     if (!email || !email.includes('@'))                { showError('Vennligst oppgi en gyldig e-postadresse.'); return; }
-    if (!deliveryType)                                 { showError('Vennligst velg leveringsmåte (serveres eller hentes).'); return; }
-    if (deliveryType === 'serveres' && !deliveryLocation) { showError('Vennligst oppgi rom / sted for levering.'); return; }
-    if (!deliveryDate)                                 { showError('Vennligst oppgi en gyldig dato (dd/mm/åååå).'); return; }
-    if (!deliveryTime)                                 { showError('Vennligst oppgi ønsket tidspunkt.'); return; }
+    const isTable = deliveryType === 'bord';
+    if (!deliveryType)                                        { showError('Vennligst velg leveringsmåte.'); return; }
+    if (deliveryType === 'serveres' && !deliveryLocation)     { showError('Vennligst oppgi rom / sted for levering.'); return; }
+    if (!deliveryDate)                                        { showError('Vennligst oppgi en gyldig dato (dd/mm/åååå).'); return; }
+    if (!deliveryTime)                                        { showError('Vennligst oppgi ønsket tidspunkt.'); return; }
 
-    // Collect selected products
+    // Collect selected products (not needed for table bookings)
     const items = [];
-    document.querySelectorAll('.product-row input[type="checkbox"]:checked').forEach(chk => {
-      const id  = chk.id.replace('chk-','');
-      const qty = parseInt(document.getElementById('qty-' + id)?.value) || 1;
-      const nameEl = chk.closest('.product-row').querySelector('.prod-label');
-      if (nameEl) items.push({ name: nameEl.textContent.trim(), qty });
-    });
+    if (!isTable) {
+      document.querySelectorAll('.product-row input[type="checkbox"]:checked').forEach(chk => {
+        const id  = chk.id.replace('chk-','');
+        const qty = parseInt(document.getElementById('qty-' + id)?.value) || 1;
+        const nameEl = chk.closest('.product-row').querySelector('.prod-label');
+        if (nameEl) items.push({ name: nameEl.textContent.trim(), qty });
+      });
+    }
 
     const btn = document.getElementById('submit-btn');
     btn.disabled = true;
@@ -638,11 +667,17 @@
         delivery_location: deliveryLocation || null,
         delivery_date:     deliveryDate,
         delivery_time:     deliveryTime,
+        order_type:      isTable ? 'table' : 'standard',
         status:          'pending'
       });
 
-      // Show success screen
+      // Show success screen (different message for table bookings)
       document.getElementById('main-form').style.display = 'none';
+      if (isTable) {
+        document.getElementById('success-icon').textContent  = '🪑';
+        document.getElementById('success-title').textContent = 'Bordreservasjon sendt!';
+        document.getElementById('success-msg').textContent   = 'Takk! Vi har mottatt bordreservasjonen din. Du vil motta en bekreftelse på e-post så snart vi har godkjent den. Ta med bestillingsreferansen din når dere ankommer.';
+      }
       const success = document.getElementById('success-screen');
       success.style.display = 'block';
       window.scrollTo({ top: 0, behavior: 'smooth' });
