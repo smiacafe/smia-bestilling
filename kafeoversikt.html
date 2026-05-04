@@ -4426,14 +4426,28 @@ async function buildInnsikt() {
   };
 
   // Fetch all data in parallel
-  let sales = [], purchases = [], waste = [], privateOrders = [], prodLog = [];
-  [sales, purchases, waste, privateOrders, prodLog] = await Promise.all([
+  let sales = [], purchases = [], waste = [], privateOrders = [], prodLog = [], recipeRows = [];
+  [sales, purchases, waste, privateOrders, prodLog, recipeRows] = await Promise.all([
     sbGet(`daily_sales?select=*${dateFilter('sale_date')}`).catch(()=>[]),
     sbGet(`purchase_receipts?select=*,purchase_items(total_price,unit_price,quantity)${dateFilter('receipt_date')}`).catch(()=>[]),
     sbGet(`waste_log?select=*${dateFilter('log_date')}`).catch(()=>[]),
     sbGet(`private_orders?select=*,private_order_items(*)${dateFilter('order_date')}`).catch(()=>[]),
-    sbGet(`production_log?select=*${dateFilter('log_date')}`).catch(()=>[])
+    sbGet(`production_log?select=*${dateFilter('log_date')}`).catch(()=>[]),
+    sbGet(`recipe_items?select=cafe_product_id,quantity,ingredients(id,cost_per_unit,name)`).catch(()=>[])
   ]);
+
+  // Build cost-per-unit map: { cafe_product_id → cost_per_unit (kr) }
+  // cost = Σ (recipe quantity × ingredient cost_per_unit)
+  const costMap = {};
+  recipeRows.forEach(r => {
+    const ingCost = Number(r.ingredients?.cost_per_unit || 0);
+    const qty     = Number(r.quantity || 0);
+    costMap[r.cafe_product_id] = (costMap[r.cafe_product_id] || 0) + qty * ingCost;
+  });
+  // Which products have at least one ingredient with a cost entered
+  const hasAnyCostSet = id => recipeRows.some(r =>
+    r.cafe_product_id === id && Number(r.ingredients?.cost_per_unit || 0) > 0
+  );
 
   const cpMap = {};
   ST.cafeProducts.forEach(p => { cpMap[p.id] = p; cpMap[p.name.toLowerCase()] = p; });
@@ -4523,13 +4537,26 @@ async function buildInnsikt() {
     const prodStats = {};
     sales.forEach(r => {
       const p   = (r.cafe_product_id ? cpMap[r.cafe_product_id] : null) || cpMap[r.product_name?.toLowerCase()];
-      const key = r.cafe_product_id || r.product_name?.toLowerCase();
+      const pid = r.cafe_product_id;
+      const key = pid || r.product_name?.toLowerCase();
       if (!key) return;
-      if (!prodStats[key]) prodStats[key] = { name: p?.name || r.product_name, units: 0, revenue: 0 };
-      prodStats[key].units   += r.units_sold;
-      prodStats[key].revenue += p ? p.selling_price * r.units_sold : 0;
+      if (!prodStats[key]) prodStats[key] = { name: p?.name || r.product_name, pid, units: 0, revenue: 0, recipeCost: 0, hasCost: false };
+      prodStats[key].units      += r.units_sold;
+      prodStats[key].revenue    += p ? p.selling_price * r.units_sold : 0;
+      if (pid && costMap[pid] !== undefined) {
+        prodStats[key].recipeCost += Number(costMap[pid] || 0) * r.units_sold;
+        prodStats[key].hasCost     = hasAnyCostSet(pid);
+      }
     });
     const prodStatsArr = Object.values(prodStats).sort((a,b) => b.revenue - a.revenue);
+
+    // Recipe-based cost totals (only for products that have cost data)
+    const totalRecipeCost    = prodStatsArr.reduce((s,p) => s + p.recipeCost, 0);
+    const totalRecipeRevenue = prodStatsArr.filter(p => p.hasCost).reduce((s,p) => s + p.revenue, 0);
+    const recipeProfit       = totalRecipeRevenue - totalRecipeCost;
+    const recipeMarginPct    = totalRecipeRevenue > 0 ? (recipeProfit / totalRecipeRevenue * 100) : null;
+    const nWithCost          = prodStatsArr.filter(p => p.hasCost).length;
+    const nTotal             = prodStatsArr.length;
 
     // Diagnostic: per-category receipt counts (used for the breakdown table)
     const receiptDiag = {};
@@ -4550,14 +4577,26 @@ async function buildInnsikt() {
     ST._chartData = { mode: 'oversikt', chartLabels, chartData, kassertAmt, good2goAmt, matAmt, posRevenue, privateRevenue, totalCost, costByType, receiptDiag };
 
     return `${periodBar}${subNav}
-    <div class="stat-grid">
+    <div style="font-size:0.75rem;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">📊 Salg og omsetning</div>
+    <div class="stat-grid" style="margin-bottom:1rem">
       <div class="stat"><div class="stat-val">${fmt(revenue)}</div><div class="stat-label">Estimert omsetning</div>${privateRevenue>0?`<div style="font-size:0.75rem;color:var(--text2);margin-top:2px">herav ${fmt(privateRevenue)} faktura</div>`:''}</div>
-      <div class="stat"><div class="stat-val">${fmt(totalCost)}</div><div class="stat-label">Innkjøpskostnad</div></div>
-      <div class="stat"><div class="stat-val" style="color:${profit>=0?'#3B6D11':'#A32D2D'}">${fmt(profit)}</div><div class="stat-label">Bruttofortjeneste</div></div>
-      <div class="stat"><div class="stat-val" style="color:${margin>=40?'#3B6D11':margin>=20?'#856404':'#A32D2D'}">${fmtN(margin)}%</div><div class="stat-label">Bruttomargin</div></div>
+      <div class="stat"><div class="stat-val">${fmt(totalCost)}</div><div class="stat-label">Innkjøp (kvitteringer)</div></div>
+      <div class="stat"><div class="stat-val" style="color:${profit>=0?'#3B6D11':'#A32D2D'}">${fmt(profit)}</div><div class="stat-label">Resultat (kvitteringer)</div></div>
+      <div class="stat"><div class="stat-val" style="color:${margin>=40?'#3B6D11':margin>=20?'#856404':'#A32D2D'}">${fmtN(margin)}%</div><div class="stat-label">Margin (kvitteringer)</div></div>
       <div class="stat"><div class="stat-val">${fmtN(totalUnits)}</div><div class="stat-label">Solgte enheter</div></div>
       <div class="stat"><div class="stat-val">${fmtN(totalWaste)}</div><div class="stat-label">Svinn totalt</div></div>
     </div>
+    ${nWithCost > 0 ? `
+    <div style="font-size:0.75rem;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">🧾 Varekost fra oppskrifter (${nWithCost} av ${nTotal} produkter har kostdata)</div>
+    <div class="stat-grid" style="margin-bottom:1rem">
+      <div class="stat"><div class="stat-val">${fmt(totalRecipeCost)}</div><div class="stat-label">Varekost (oppskrift)</div></div>
+      <div class="stat"><div class="stat-val" style="color:${recipeProfit>=0?'#3B6D11':'#A32D2D'}">${fmt(recipeProfit)}</div><div class="stat-label">Dekningsbidrag</div></div>
+      <div class="stat"><div class="stat-val" style="color:${recipeMarginPct>=60?'#3B6D11':recipeMarginPct>=40?'#856404':'#A32D2D'}">${recipeMarginPct!=null?fmtN(recipeMarginPct)+'%':'—'}</div><div class="stat-label">Bruttomargin (oppskrift)</div></div>
+      <div class="stat"><div class="stat-val" style="color:var(--text2);font-size:0.9rem">${nTotal-nWithCost > 0 ? `⚠️ ${nTotal-nWithCost} produkter mangler kostdata` : '✅ Alle produkter'}</div><div class="stat-label">Kostnadsdekning</div></div>
+    </div>` : `
+    <div style="background:#fff9ee;border:1px solid #e6d5a0;border-radius:8px;padding:10px 14px;font-size:0.85rem;color:#856404;margin-bottom:1rem">
+      ⚠️ Ingen ingredienspriser er lagt inn ennå — gå til <strong>Oppskrifter → Ingredienser</strong> og legg inn kostnad per enhet for å se varekost og margin per produkt.
+    </div>`}
     <div class="grid2">
       <div class="card">
         <div class="card-header"><span class="card-title">Salg — ${esc(label)}</span></div>
@@ -4604,22 +4643,39 @@ async function buildInnsikt() {
       </div>
       ${prodStatsArr.length===0?'<div class="empty">Ingen salgsdata i denne perioden</div>':`
       <table>
-        <thead><tr><th>Produkt</th><th style="text-align:right">Enheter</th><th style="text-align:right">Omsetning</th><th style="text-align:right">Andel</th></tr></thead>
+        <thead><tr>
+          <th>Produkt</th>
+          <th style="text-align:right">Enheter</th>
+          <th style="text-align:right">Omsetning</th>
+          <th style="text-align:right">Varekost</th>
+          <th style="text-align:right">Dekningsbidrag</th>
+          <th style="text-align:right">Margin %</th>
+        </tr></thead>
         <tbody>
-          ${prodStatsArr.map(p=>`<tr>
-            <td>${esc(p.name)}</td>
-            <td style="text-align:right">${fmtN(p.units)}</td>
-            <td style="text-align:right">${fmt(p.revenue)}</td>
-            <td style="text-align:right">${revenue>0?fmtN(p.revenue/revenue*100)+'%':'—'}</td>
-          </tr>`).join('')}
+          ${prodStatsArr.map(p => {
+            const db  = p.hasCost ? p.revenue - p.recipeCost : null;
+            const pct = p.hasCost && p.revenue > 0 ? (db / p.revenue * 100) : null;
+            const col = pct == null ? 'var(--text2)' : pct >= 60 ? '#3B6D11' : pct >= 40 ? '#856404' : '#A32D2D';
+            return `<tr>
+              <td>${esc(p.name)}</td>
+              <td style="text-align:right">${fmtN(p.units)}</td>
+              <td style="text-align:right">${fmt(p.revenue)}</td>
+              <td style="text-align:right;color:var(--text2)">${p.hasCost ? fmt(p.recipeCost) : '—'}</td>
+              <td style="text-align:right;font-weight:${db!=null?'600':'400'};color:${db!=null?(db>=0?'#3B6D11':'#A32D2D'):'var(--text2)'}">${db!=null?fmt(db):'—'}</td>
+              <td style="text-align:right;font-weight:600;color:${col}">${pct!=null?fmtN(pct)+'%':'—'}</td>
+            </tr>`;
+          }).join('')}
           <tr style="font-weight:700;border-top:2px solid var(--border)">
             <td>Totalt</td>
             <td style="text-align:right">${fmtN(prodStatsArr.reduce((s,p)=>s+p.units,0))}</td>
             <td style="text-align:right">${fmt(revenue)}</td>
-            <td style="text-align:right">100%</td>
+            <td style="text-align:right">${nWithCost>0?fmt(totalRecipeCost):'—'}</td>
+            <td style="text-align:right">${nWithCost>0?fmt(recipeProfit):'—'}</td>
+            <td style="text-align:right">${recipeMarginPct!=null?fmtN(recipeMarginPct)+'%':'—'}</td>
           </tr>
         </tbody>
-      </table>`}
+      </table>
+      ${nWithCost < nTotal ? `<div style="font-size:0.78rem;color:#856404;margin-top:8px">⚠️ Varekost og margin vises kun for produkter med oppskrift og ingredienspriser. Legg inn priser under Oppskrifter → Ingredienser.</div>` : ''}`}
     </div>`;
   }
 
@@ -4814,18 +4870,38 @@ async function buildInnsikt() {
 
     ST._chartData = { mode: 'produkt', ptLabels, ptProd, ptSold, ptWaste, _pKassert: kassertU, _pG2G: g2gU, _pMat: matU };
 
-    const rateCol = wasteRate==null?'#aaa':wasteRate>30?'#e53935':wasteRate>15?'#e6a817':'#43a047';
-    const hasChart = ptLabels.some((_,i) => ptProd[i]+ptSold[i]+ptWaste[i] > 0);
+    const costPerUnit  = costMap[selectedId] || 0;
+    const hasCost      = hasAnyCostSet(selectedId);
+    const marginPerUnit = hasCost ? (prod.selling_price||0) - costPerUnit : null;
+    const marginPct     = hasCost && (prod.selling_price||0) > 0 ? (marginPerUnit / (prod.selling_price||0) * 100) : null;
+    const totalContrib  = hasCost ? totalSold * marginPerUnit : null;
+    const totalCostProd = hasCost ? totalSold * costPerUnit : null;
+
+    const rateCol   = wasteRate==null?'#aaa':wasteRate>30?'#e53935':wasteRate>15?'#e6a817':'#43a047';
+    const marginCol = marginPct==null?'#aaa':marginPct>=60?'#3B6D11':marginPct>=40?'#856404':'#A32D2D';
+    const hasChart  = ptLabels.some((_,i) => ptProd[i]+ptSold[i]+ptWaste[i] > 0);
 
     return `${periodBar}${subNav}${prodSelector}
-    <div class="stat-grid">
+    <div style="font-size:0.75rem;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Salg — ${esc(label)}</div>
+    <div class="stat-grid" style="margin-bottom:1rem">
       <div class="stat"><div class="stat-val">${fmtN(totalSold)}</div><div class="stat-label">Solgte enheter</div></div>
       <div class="stat"><div class="stat-val">${fmt(revenue)}</div><div class="stat-label">Omsetning</div></div>
       <div class="stat"><div class="stat-val">${totalProduced>0?fmtN(totalProduced):'—'}</div><div class="stat-label">Produsert</div></div>
       <div class="stat"><div class="stat-val" style="color:#e53935">${fmtN(totalWasteU)}</div><div class="stat-label">Svinn totalt</div></div>
       <div class="stat"><div class="stat-val" style="color:${rateCol}">${wasteRate!=null?fmtN(wasteRate)+'%':'—'}</div><div class="stat-label">Svinn %</div></div>
-      <div class="stat"><div class="stat-val">${fmt(prod.selling_price||0)}</div><div class="stat-label">Salgspris</div></div>
     </div>
+    <div style="font-size:0.75rem;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Pris og margin per enhet</div>
+    <div class="stat-grid" style="margin-bottom:1rem">
+      <div class="stat"><div class="stat-val">${fmt(prod.selling_price||0)}</div><div class="stat-label">Salgspris</div></div>
+      <div class="stat"><div class="stat-val" style="color:${hasCost?'var(--text)':'#aaa'}">${hasCost?fmt(costPerUnit):'Mangler oppskrift'}</div><div class="stat-label">Varekost per enhet</div></div>
+      <div class="stat"><div class="stat-val" style="color:${hasCost?(marginPerUnit>=0?'#3B6D11':'#A32D2D'):'#aaa'}">${hasCost?fmt(marginPerUnit):'—'}</div><div class="stat-label">Dekningsbidrag per enhet</div></div>
+      <div class="stat"><div class="stat-val" style="color:${marginCol}">${marginPct!=null?fmtN(marginPct)+'%':'—'}</div><div class="stat-label">Bruttomargin %</div></div>
+      <div class="stat"><div class="stat-val" style="color:${hasCost?(totalContrib>=0?'#3B6D11':'#A32D2D'):'#aaa'}">${hasCost?fmt(totalContrib):'—'}</div><div class="stat-label">Dekningsbidrag totalt</div></div>
+      <div class="stat"><div class="stat-val" style="color:${hasCost?'var(--text2)':'#aaa'}">${hasCost?fmt(totalCostProd):'—'}</div><div class="stat-label">Varekost totalt</div></div>
+    </div>
+    ${!hasCost ? `<div style="background:#fff9ee;border:1px solid #e6d5a0;border-radius:8px;padding:10px 14px;font-size:0.85rem;color:#856404;margin-bottom:1rem">
+      ⚠️ Ingen ingredienspriser er registrert for dette produktet. Gå til <strong>Oppskrifter → Ingredienser</strong> og legg inn kostnad per enhet.
+    </div>` : ''}
     <div class="grid2">
       <div class="card">
         <div class="card-header"><span class="card-title">${esc(prod.name)} — produsert / solgt / svinn</span></div>
