@@ -103,8 +103,9 @@
     .product-row {
       display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 10px 12px;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 12px;
       border: 1.5px solid #e0e0e0;
       border-radius: 8px;
       background: #fafafa;
@@ -115,8 +116,8 @@
       background: #f1f8f1;
     }
     .product-row input[type="checkbox"] {
-      width: 20px;
-      height: 20px;
+      width: 22px;
+      height: 22px;
       cursor: pointer;
       accent-color: #2e7d32;
       flex-shrink: 0;
@@ -126,6 +127,7 @@
       font-size: 0.95rem;
       font-weight: 500;
       cursor: pointer;
+      min-width: 0;
     }
     .suggestion-badge {
       font-size: 0.78rem;
@@ -134,27 +136,53 @@
       border: 1px solid #c8e6c9;
       border-radius: 12px;
       padding: 2px 9px;
-      white-space: nowrap;
       font-weight: 600;
     }
+    /* Quantity row always wraps to its own line */
     .product-row .qty-wrap {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
+      flex-basis: 100%;
+      padding-left: 32px; /* aligns under product name */
     }
     .product-row .qty-wrap label {
-      font-size: 0.8rem;
-      color: #666;
-      white-space: nowrap;
+      font-size: 0.85rem;
+      color: #555;
+      font-weight: 500;
     }
-    .product-row .qty-wrap input[type="number"] {
-      width: 64px;
-      padding: 5px 8px;
+    .qty-stepper {
+      display: flex;
+      align-items: center;
+      gap: 0;
       border: 1.5px solid #ccc;
-      border-radius: 6px;
-      font-size: 0.92rem;
-      text-align: center;
+      border-radius: 8px;
+      overflow: hidden;
     }
+    .qty-stepper button {
+      width: 38px;
+      height: 38px;
+      border: none;
+      background: #f0f0f0;
+      font-size: 1.2rem;
+      cursor: pointer;
+      flex-shrink: 0;
+      line-height: 1;
+      touch-action: manipulation;
+    }
+    .qty-stepper button:active { background: #ddd; }
+    .qty-stepper input[type="number"] {
+      width: 52px;
+      border: none;
+      border-left: 1.5px solid #ccc;
+      border-right: 1.5px solid #ccc;
+      padding: 6px 4px;
+      font-size: 1rem;
+      text-align: center;
+      -moz-appearance: textfield;
+    }
+    .qty-stepper input[type="number"]::-webkit-inner-spin-button,
+    .qty-stepper input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
 
     .loading-products {
       text-align: center;
@@ -426,9 +454,13 @@
           <span class="prod-label">${escHtml(p.name)}</span>
           <span class="suggestion-badge" id="sug-${p.id}" style="display:none"></span>
           <div class="qty-wrap" id="qty-wrap-${p.id}" style="display:none" onclick="event.stopPropagation()">
-            <label for="qty-${p.id}">Antall ${escHtml(p.name)}:</label>
-            <input type="number" id="qty-${p.id}" value="1" min="1" max="999"
-              oninput="document.getElementById('row-${p.id}').dataset.manualQty='true'">
+            <label>Antall:</label>
+            <div class="qty-stepper">
+              <button type="button" onmousedown="stepQty('${p.id}',-1)">−</button>
+              <input type="number" id="qty-${p.id}" value="1" min="1" max="999" inputmode="numeric"
+                oninput="document.getElementById('row-${p.id}').dataset.manualQty='true'">
+              <button type="button" onmousedown="stepQty('${p.id}',1)">+</button>
+            </div>
           </div>
           ${isThermos ? `<div id="kanne-note-${p.id}" style="display:none;width:100%;margin-top:6px;font-size:0.82rem;color:#2e7d32;background:#f1f8f1;border:1px solid #c8e6c9;border-radius:6px;padding:6px 10px">☕ Inkluderer vann, varmt vann og te</div>` : ''}
         </div>`;
@@ -439,6 +471,14 @@
     } catch(e) {
       listEl.innerHTML = `<div class="no-products">Kunne ikke laste produkter. Prøv å laste siden på nytt.<br><small style="color:#ccc">${e.message}</small></div>`;
     }
+  }
+
+  function stepQty(id, delta) {
+    const inp = document.getElementById('qty-' + id);
+    if (!inp) return;
+    const next = Math.max(1, (parseInt(inp.value) || 1) + delta);
+    inp.value = next;
+    document.getElementById('row-' + id).dataset.manualQty = 'true';
   }
 
   // Clicking anywhere on the row (not the checkbox) — manually toggles
