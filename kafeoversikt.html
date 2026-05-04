@@ -505,10 +505,11 @@ async function startApp(role) {
   ST.tab = tabs[0].id;
   renderNav();
   await renderTab();
-  // Load kantine badge count, lager status and pending requests in background
+  // Load kantine badge count, lager status, pending requests and bord badge in background
   refreshKantineUnsynced();
   refreshLagerStatus();
   refreshPendingRequests();
+  refreshBordBadge();
 }
 
 function getTabs(role) {
@@ -519,6 +520,7 @@ function getTabs(role) {
       { id: 'salg',      label: '📊 Salg' },
       { id: 'oppskrift', label: '📋 Oppskrifter' },
       { id: 'ordre',     label: '📄 Faktura' },
+      { id: 'bord',      label: '🪑 Bord' },
       { id: 'innsikt',   label: '💡 Innsikt' },
       { id: 'lager',     label: '📦 Lager' },
     ];
@@ -526,6 +528,7 @@ function getTabs(role) {
   return [
     { id: 'innkjop', label: '🛒 Innkjøp' },
     { id: 'avfall',  label: '📋 Daglig' },
+    { id: 'bord',    label: '🪑 Bord' },
     { id: 'lager',   label: '📦 Lager' },
   ];
 }
@@ -542,6 +545,9 @@ function renderNav() {
     }
     if (t.id === 'ordre' && ST._pendingRequests > 0) {
       label += ` <span style="background:#e53935;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px">${ST._pendingRequests}</span>`;
+    }
+    if (t.id === 'bord' && ST._bordBadge > 0) {
+      label += ` <span style="background:#e53935;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px">${ST._bordBadge}</span>`;
     }
     return `<button class="${ST.tab===t.id?'active':''}" onclick="switchTab('${t.id}')">${label}</button>`;
   }).join('');
@@ -575,6 +581,7 @@ async function renderTab() {
       case 'salg':     c.innerHTML = await buildSalg(); break;
       case 'oppskrift':c.innerHTML = await buildOppskrift(); break;
       case 'ordre':    c.innerHTML = await buildOrdre(); break;
+      case 'bord':     c.innerHTML = await buildBord(); break;
       case 'innsikt':  c.innerHTML = await buildInnsikt(); break;
       case 'lager':    c.innerHTML = await buildLager(); break;
       default:         c.innerHTML = '<div class="empty">Ukjent fane</div>';
@@ -3425,6 +3432,284 @@ async function addRecipeComponent(productId) {
 }
 
 // =============================================================
+//  TAB: BORD (table bookings)
+// =============================================================
+ST._bordItemState = {};   // stepper state for item picker
+ST._bordSeating   = null; // request ID currently being seated
+
+function stepBord(key, delta) {
+  const current = parseFloat(ST._bordItemState[key]) || 0;
+  const next = Math.max(0, current + delta);
+  ST._bordItemState[key] = String(next);
+  const inp = document.getElementById('bi-' + key);
+  if (inp) inp.value = next;
+}
+
+function updateBordCustomRows() {
+  // Re-render custom extra rows without full page reload
+  const wrap = document.getElementById('bord-custom-rows');
+  if (!wrap) return;
+  const rows = ST._bordCustomItems || [];
+  wrap.innerHTML = rows.map((item, i) => `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <input type="text" value="${esc(item.name)}" placeholder="Produktnavn"
+        style="flex:2;padding:6px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:0.9rem"
+        onchange="ST._bordCustomItems[${i}].name=this.value">
+      <input type="number" value="${item.price}" placeholder="Pris" min="0" step="1"
+        style="flex:1;padding:6px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:0.9rem;text-align:center"
+        onchange="ST._bordCustomItems[${i}].price=Number(this.value)">
+      <input type="number" value="${item.qty}" placeholder="Ant." min="1" step="1"
+        style="width:52px;padding:6px 4px;border:1.5px solid var(--border);border-radius:6px;font-size:0.9rem;text-align:center"
+        onchange="ST._bordCustomItems[${i}].qty=Number(this.value)||1">
+      <button onclick="ST._bordCustomItems.splice(${i},1);updateBordCustomRows()"
+        style="background:none;border:none;color:#e53935;font-size:1.1rem;cursor:pointer;padding:4px" title="Fjern">✕</button>
+    </div>`).join('');
+}
+
+async function buildBord() {
+  let allRequests = [];
+  try { allRequests = await sbGet('order_requests?order_type=eq.table&order=delivery_date.asc,delivery_time.asc'); } catch(e) {}
+
+  const todayStr = today();
+  const pending         = allRequests.filter(r => r.status === 'pending');
+  const confirmedUpcoming = allRequests.filter(r => r.status === 'table_confirmed' && r.delivery_date >= todayStr);
+  const past            = allRequests.filter(r => r.status === 'table_confirmed' && r.delivery_date < todayStr);
+  const completed       = allRequests.filter(r => r.status === 'confirmed' || r.status === 'dismissed');
+
+  // If we're in the middle of seating a guest, show item picker
+  if (ST._bordSeating) {
+    const req = allRequests.find(r => r.id === ST._bordSeating);
+    if (req) return buildBordItemPicker(req);
+    ST._bordSeating = null; // stale ID — fall through
+  }
+
+  const statusBadge = s => {
+    if (s === 'pending')          return `<span style="background:#fff8e1;color:#f57f17;border:1px solid #ffe082;border-radius:5px;padding:2px 8px;font-size:0.78rem;font-weight:600">⏳ Venter</span>`;
+    if (s === 'table_confirmed')  return `<span style="background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;border-radius:5px;padding:2px 8px;font-size:0.78rem;font-weight:600">✅ Bekreftet</span>`;
+    if (s === 'confirmed')        return `<span style="background:#e8f5e9;color:#2e7d32;border:1px solid #b2dfbc;border-radius:5px;padding:2px 8px;font-size:0.78rem;font-weight:600">🧾 Fullført</span>`;
+    if (s === 'dismissed')        return `<span style="background:#ffeaea;color:#b71c1c;border:1px solid #ffcdd2;border-radius:5px;padding:2px 8px;font-size:0.78rem;font-weight:600">❌ Avslått</span>`;
+    return '';
+  };
+
+  const bookingCard = (r, showActions) => `
+    <div style="background:var(--bg);border:1px solid var(--border2);border-radius:var(--radius);padding:14px 16px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px">
+        <div>
+          <div style="font-weight:700;font-size:1rem">${esc(r.invoice_to||'—')}</div>
+          ${r.contact_name?`<div style="font-size:0.85rem;color:var(--text2)">v/ ${esc(r.contact_name)}</div>`:''}
+        </div>
+        ${statusBadge(r.status)}
+      </div>
+      <div style="margin-top:8px;font-size:0.88rem;display:flex;flex-wrap:wrap;gap:14px;color:var(--text2)">
+        ${r.delivery_date?`<span>📅 ${fmtDate(r.delivery_date)}${r.delivery_time?' kl. '+esc(r.delivery_time):''}</span>`:''}
+        ${r.num_people?`<span>👥 ${r.num_people} gjester</span>`:''}
+        ${r.email?`<span>📧 ${esc(r.email)}</span>`:''}
+      </div>
+      ${r.note?`<p style="margin:8px 0 0;font-size:0.85rem;color:var(--text2);border-top:1px solid var(--border);padding-top:8px">💬 ${esc(r.note)}</p>`:''}
+      ${showActions === 'confirm' ? `
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" onclick="confirmTableBooking(${r.id},'${esc(r.email||'')}','${esc(r.contact_name||'')}','${esc(r.invoice_to||'')}')">✅ Bekreft & send e-post</button>
+          <button class="btn btn-sm" style="border-color:#e53935;color:#e53935" onclick="dismissRequest(${r.id},'${esc(r.email||'')}','${esc(r.contact_name||'')}')">❌ Avslå</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteRequest(${r.id})">🗑️ Slett</button>
+        </div>` : showActions === 'seat' ? `
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" onclick="ST._bordSeating=${r.id};ST._bordItemState={};ST._bordCustomItems=[];renderTab()">🪑 Kunden er her — legg inn bestilling</button>
+        </div>` : showActions === 'past' ? `
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn btn-sm" style="border-color:#e53935;color:#e53935" onclick="dismissRequest(${r.id},'','')">Marker som ikke møtt opp</button>
+        </div>` : ''}
+    </div>`;
+
+  return `
+  <div style="max-width:700px">
+    ${ST.role === 'admin' && pending.length > 0 ? `
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-header"><span class="card-title">⏳ Venter på bekreftelse (${pending.length})</span></div>
+      ${pending.map(r => bookingCard(r, 'confirm')).join('')}
+    </div>` : ''}
+
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-header">
+        <span class="card-title">📅 Kommende bordbookinger</span>
+        <button class="btn btn-sm" onclick="refreshBordBadge();renderTab()">🔄</button>
+      </div>
+      ${confirmedUpcoming.length === 0
+        ? `<div class="empty">Ingen bekreftede bordbookinger fremover</div>`
+        : confirmedUpcoming.map(r => bookingCard(r, r.delivery_date === todayStr ? 'seat' : '')).join('')}
+    </div>
+
+    ${past.length > 0 ? `
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-header"><span class="card-title" style="color:var(--text2)">Tidligere bekreftet — ikke fullført</span></div>
+      ${past.map(r => bookingCard(r, 'past')).join('')}
+    </div>` : ''}
+
+    ${completed.length > 0 ? `
+    <div class="card">
+      <div class="card-header"><span class="card-title" style="color:var(--text2)">Fullførte / avslåtte</span></div>
+      ${completed.map(r => bookingCard(r, '')).join('')}
+    </div>` : ''}
+
+    ${allRequests.length === 0 ? `<div class="card"><div class="empty">Ingen bordbookinger ennå</div></div>` : ''}
+  </div>`;
+}
+
+function buildBordItemPicker(req) {
+  const products = ST.cafeProducts.filter(p => p.active && !p.made_to_order);
+  const custom   = ST._bordCustomItems || [];
+
+  const prodRows = products.map(p => {
+    const val = ST._bordItemState['p_' + p.id] || '0';
+    const price = p.selling_price || 0;
+    return `
+    <tr style="border-bottom:1px solid var(--bg3)">
+      <td style="padding:6px 4px;font-weight:500">${esc(p.name)}</td>
+      <td style="padding:4px 2px;text-align:center;color:var(--text2);font-size:0.85rem">${price > 0 ? 'kr ' + fmtN(price) : '—'}</td>
+      <td style="padding:4px 2px">
+        <div style="display:flex;align-items:center;gap:2px;justify-content:center">
+          <button onmousedown="stepBord('p_${p.id}',-1)" style="width:28px;height:28px;border:1px solid #ddd;background:#f5f5f5;border-radius:5px;font-size:15px;cursor:pointer">−</button>
+          <input type="number" min="0" step="1" value="${esc(val)}" id="bi-p_${p.id}"
+            style="width:42px;text-align:center;border-color:#ddd;padding:3px 2px;font-size:0.9rem"
+            onchange="ST._bordItemState['p_${p.id}']=this.value">
+          <button onmousedown="stepBord('p_${p.id}',1)" style="width:28px;height:28px;border:1px solid #ddd;background:#f5f5f5;border-radius:5px;font-size:15px;cursor:pointer">+</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+  <div style="max-width:700px">
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-header">
+        <button class="btn btn-sm" onclick="ST._bordSeating=null;renderTab()" style="margin-right:8px">← Tilbake</button>
+        <span class="card-title">🪑 Bestilling for ${esc(req.invoice_to||'—')}</span>
+      </div>
+      <div style="font-size:0.88rem;color:var(--text2);margin-bottom:12px;display:flex;flex-wrap:wrap;gap:12px">
+        ${req.delivery_date?`<span>📅 ${fmtDate(req.delivery_date)}${req.delivery_time?' kl. '+esc(req.delivery_time):''}</span>`:''}
+        ${req.num_people?`<span>👥 ${req.num_people} gjester</span>`:''}
+        ${req.contact_name?`<span>v/ ${esc(req.contact_name)}</span>`:''}
+      </div>
+      <div style="overflow-x:auto">
+        <table style="min-width:380px">
+          <thead><tr>
+            <th>Produkt</th>
+            <th style="text-align:center">Pris/stk</th>
+            <th style="text-align:center">Antall</th>
+          </tr></thead>
+          <tbody>${prodRows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-header">
+        <span class="card-title">➕ Tilleggsbestillinger</span>
+        <button class="btn btn-sm" onclick="if(!ST._bordCustomItems)ST._bordCustomItems=[];ST._bordCustomItems.push({name:'',price:0,qty:1});updateBordCustomRows()">+ Legg til</button>
+      </div>
+      <p style="font-size:0.82rem;color:var(--text2);margin-bottom:10px">Produkter som ikke finnes i listen ovenfor — f.eks. spesialvarer, drikke, ekstra tilpasninger</p>
+      <div id="bord-custom-rows"></div>
+    </div>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">
+      <button class="btn btn-primary" onclick="finaliseBordOrder(${req.id})">💾 Fullfør og opprett faktura</button>
+      <button class="btn" onclick="ST._bordSeating=null;renderTab()">Avbryt</button>
+    </div>
+  </div>`;
+}
+
+async function confirmTableBooking(id, email, name, invoiceTo) {
+  try {
+    await sbPatch(`order_requests?id=eq.${id}`, { status: 'table_confirmed' });
+    ST._bordBadge = Math.max(0, (ST._bordBadge||1) - 1);
+    renderNav();
+
+    if (email) {
+      const [r] = await sbGet(`order_requests?id=eq.${id}`);
+      const subject = encodeURIComponent('Bordreservasjon bekreftet – SMIA Kafé');
+      const body = encodeURIComponent(
+        `Hei${name ? ' ' + name : ''},\n\n` +
+        `Vi bekrefter bordreservasjonen din hos SMIA Kafé.\n\n` +
+        `── RESERVASJONSDETALJER ──\n` +
+        `${r?.delivery_date ? 'Dato: ' + fmtDate(r.delivery_date) + (r.delivery_time ? ' kl. ' + r.delivery_time : '') + '\n' : ''}` +
+        `${r?.num_people ? 'Antall gjester: ' + r.num_people + '\n' : ''}` +
+        `Faktureres til: ${invoiceTo}\n\n` +
+        `Menyen velges ved ankomst. Husk å oppgi navn/referanse når dere ankommer.\n\n` +
+        `VIKTIG: AVBESTILLING MÅ SKJE SENEST 48 TIMER FØR RESERVASJONSTIDSPUNKTET.\n\n` +
+        `Ta gjerne kontakt med oss dersom du har spørsmål.\n\n` +
+        `Med vennlig hilsen,\nSMIA Kafé\nVennesla Voksenopplæring`
+      );
+      window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+    }
+    showAlert('Bordreservasjon bekreftet! E-post klargjort.');
+    await refreshBordBadge();
+    renderTab();
+  } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
+}
+
+async function finaliseBordOrder(requestId) {
+  const rows = [];
+  const products = ST.cafeProducts.filter(p => p.active && !p.made_to_order);
+
+  // Standard menu items from stepper
+  for (const p of products) {
+    const qty = parseFloat(ST._bordItemState['p_' + p.id]) || 0;
+    if (qty > 0) {
+      const price = p.selling_price || 0;
+      rows.push({ product_name: p.name, quantity: qty, unit_price: price, total_price: qty * price, cafe_product_id: p.id });
+    }
+  }
+  // Custom extra items
+  for (const item of (ST._bordCustomItems || [])) {
+    if (item.name && item.qty > 0) {
+      rows.push({ product_name: item.name, quantity: item.qty, unit_price: item.price || 0, total_price: (item.qty) * (item.price || 0), cafe_product_id: null });
+    }
+  }
+
+  if (rows.length === 0) { showAlert('Legg til minst ett produkt', 'error'); return; }
+
+  try {
+    const [r] = await sbGet(`order_requests?id=eq.${requestId}`);
+
+    // Create private order
+    const [order] = await sbPost('private_orders', [{
+      customer_name: r.invoice_to || 'Ukjent',
+      order_date:    today(),
+      delivery_date: r.delivery_date || today(),
+      note:          (r.contact_name ? 'v/ ' + r.contact_name + (r.note ? ' — ' : '') : '') + (r.note || '') + ' [Bordbooking]',
+      status: 'utkast'
+    }]);
+
+    // Insert order items
+    const itemRows = rows.map(row => ({ ...row, order_id: order.id }));
+    await sbPost('private_order_items', itemRows);
+
+    // Mark request as fully confirmed
+    await sbPatch(`order_requests?id=eq.${requestId}`, { status: 'confirmed' });
+    ST._bordSeating   = null;
+    ST._bordItemState = {};
+    ST._bordCustomItems = [];
+
+    await refreshBordBadge();
+    showAlert('Ordre opprettet! Gå til Faktura-fanen for å sende.');
+
+    // Jump straight to the new order in the Ordre tab (admin only)
+    if (ST.role === 'admin') {
+      ST._ordreEdit = null;
+      ST._ordreFormState = {
+        enhet: r.invoice_to || '', contact: r.contact_name || '',
+        date: r.delivery_date || today(), dateDisp: fmtDate(r.delivery_date || today()),
+        time: r.delivery_time || '', location: '', people: String(r.num_people || ''),
+        note: (r.contact_name ? 'v/ ' + r.contact_name + ' — ' : '') + (r.note || '') + ' [Bordbooking]'
+      };
+      ST._ordreRows = rows.map((row, idx) => ({ id: Date.now() + idx, ...row }));
+      ST.tab = 'ordre';
+      ST.subTab.ordre = 'ny';
+    }
+    renderTab();
+  } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
+}
+
+// =============================================================
 //  TAB: ORDRE & FAKTURA
 // =============================================================
 async function buildOrdre() {
@@ -3521,13 +3806,18 @@ async function buildOrdreForesporsler() {
   };
 
   const renderCard = (r, showActions) => {
+    const isTable = r.order_type === 'table';
     const items = Array.isArray(r.items) ? r.items : (typeof r.items === 'string' ? JSON.parse(r.items||'[]') : []);
-    const itemsHtml = items.length > 0
-      ? `<ul style="margin:6px 0 0 0;padding-left:18px;font-size:0.88rem;color:var(--text2)">${items.map(i=>`<li>${esc(i.name)}${i.qty>1?` × ${i.qty}`:''}</li>`).join('')}</ul>`
-      : `<p style="font-size:0.88rem;color:#aaa;margin:4px 0 0">Ingen produkter valgt</p>`;
+    const itemsHtml = isTable
+      ? `<p style="font-size:0.88rem;color:#1565c0;margin:6px 0 0;background:#e3f2fd;padding:5px 10px;border-radius:6px">🪑 Bordbooking — produkter velges ved ankomst</p>`
+      : items.length > 0
+        ? `<ul style="margin:6px 0 0 0;padding-left:18px;font-size:0.88rem;color:var(--text2)">${items.map(i=>`<li>${esc(i.name)}${i.qty>1?` × ${i.qty}`:''}</li>`).join('')}</ul>`
+        : `<p style="font-size:0.88rem;color:#aaa;margin:4px 0 0">Ingen produkter valgt</p>`;
     const actionsHtml = `
       <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-        ${showActions ? `
+        ${showActions && isTable ? `
+        <button class="btn btn-primary btn-sm" onclick="ST.tab='bord';renderTab()">🪑 Håndter i Bord-fanen</button>
+        ` : showActions && !isTable ? `
         <button class="btn btn-primary btn-sm" onclick="confirmRequest(${r.id},'${esc(r.email||'')}','${esc(r.contact_name||r.invoice_to||'')}','${esc(r.invoice_to||'')}')">✅ Bekreft, opprett ordre & send e-post</button>
         <button class="btn btn-sm" style="border-color:#e53935;color:#e53935" onclick="dismissRequest(${r.id},'${esc(r.email||'')}','${esc(r.contact_name||r.invoice_to||'')}')">❌ Avslå & send e-post</button>
         ` : ''}
@@ -3714,6 +4004,18 @@ async function refreshPendingRequests() {
     ST._pendingRequests = rows.length;
     renderNav();
   } catch(e) { ST._pendingRequests = 0; }
+}
+
+async function refreshBordBadge() {
+  try {
+    // Badge = pending table bookings (admin needs to confirm) + today's confirmed table bookings (staff needs to seat)
+    const [pending, confirmed] = await Promise.all([
+      sbGet(`order_requests?order_type=eq.table&status=eq.pending&select=id`),
+      sbGet(`order_requests?order_type=eq.table&status=eq.table_confirmed&delivery_date=gte.${today()}&select=id`)
+    ]);
+    ST._bordBadge = pending.length + confirmed.length;
+    renderNav();
+  } catch(e) { ST._bordBadge = 0; }
 }
 
 function buildOrdreForm() {
