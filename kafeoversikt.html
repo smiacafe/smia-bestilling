@@ -943,10 +943,10 @@ async function buildInnkjop() {
     }
   }
 
-  const subTab = ST.subTab.innkjop || (ST.role === 'admin' ? 'supermarked' : 'supermarked');
+  const subTab = ST.subTab.innkjop || 'supermarked';
   const tabs = ST.role === 'admin'
     ? ['supermarked','kantine','ekstern','historikk','prishistorikk']
-    : ['supermarked'];
+    : ['supermarked','historikk'];
   const kantineBadge = ST._kantineUnsynced > 0 ? ` <span style="background:#e6a817;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle">${ST._kantineUnsynced}</span>` : '';
   const tabLabels = { supermarked: '🛒 Supermarked', kantine: `🏢 Kantine${kantineBadge}`, ekstern: '🏪 Ekstern', historikk: '📋 Historikk', prishistorikk: '📈 Prishistorikk' };
 
@@ -1021,7 +1021,7 @@ function buildInnkjopForm(supplierType) {
     <div class="row" style="margin-top:10px">
       <button class="btn btn-sm" onclick="addPurchaseRow()">+ Legg til rad</button>
       <div class="spacer"></div>
-      <span style="font-weight:700;font-size:15px">${fmt(total)}</span>
+      <span id="purchase-grand-total" style="font-weight:700;font-size:15px">${fmt(total)}</span>
     </div>
     <div style="margin-top:1rem">
       <button class="btn btn-primary" onclick="savePurchase('${supplierType}')">💾 Lagre kvittering</button>
@@ -1045,6 +1045,12 @@ function updatePurchaseRow(id, field, val) {
   if (row) row[field] = (field === 'unitPrice' || field === 'qty') ? val.replace(',', '.') : val;
 }
 
+function refreshPurchaseTotal() {
+  const grandTotal = (ST._purchaseRows||[]).reduce((s,r) => s + (r.total||0), 0);
+  const el = document.getElementById('purchase-grand-total');
+  if (el) el.textContent = fmt(grandTotal);
+}
+
 function calcPurchaseRow(id) {
   const row = (ST._purchaseRows||[]).find(r => r.id === id);
   if (!row) return;
@@ -1053,6 +1059,7 @@ function calcPurchaseRow(id) {
   row.total = qty * up;
   const totalEl = document.getElementById('pr-total-' + id);
   if (totalEl) totalEl.value = row.total > 0 ? fmtN(row.total) : '';
+  refreshPurchaseTotal();
 }
 
 function calcPurchaseRowFromTotal(id, totalVal) {
@@ -1067,6 +1074,7 @@ function calcPurchaseRowFromTotal(id, totalVal) {
     const priceEl = document.getElementById('pr-price-' + id);
     if (priceEl) priceEl.value = fmtN(unitPrice);
   }
+  refreshPurchaseTotal();
 }
 
 // =============================================================
@@ -1607,7 +1615,9 @@ async function importKantineOrder(orderId) {
 }
 
 async function buildInnkjopHistorikk() {
-  const filterType = ST._histType || 'alle';
+  // Staff can only see supermarked receipts
+  const isStaff = ST.role === 'staff';
+  const filterType = isStaff ? 'supermarked' : (ST._histType || 'alle');
   let query = 'purchase_receipts?select=*,purchase_items(*)&order=receipt_date.desc&limit=60';
   if (filterType !== 'alle') query += `&supplier_type=eq.${filterType}`;
 
@@ -1639,10 +1649,10 @@ async function buildInnkjopHistorikk() {
                 </tr>`).join('')}
               </tbody>
             </table>
-            ${ST.role === 'admin' ? `<div style="margin-top:8px;display:flex;gap:8px">
+            <div style="margin-top:8px;display:flex;gap:8px">
               <button class="btn btn-sm" onclick="openReceiptEdit(${r.id})">✏️ Rediger kvittering</button>
-              <button class="btn btn-sm btn-danger" onclick="deleteReceipt(${r.id})">🗑️ Slett kvittering</button>
-            </div>` : ''}
+              ${ST.role === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="deleteReceipt(${r.id})">🗑️ Slett kvittering</button>` : ''}
+            </div>
           </div>
         </td>
       </tr>` : '';
@@ -1665,14 +1675,14 @@ async function buildInnkjopHistorikk() {
   return `
   <div class="card">
     <div class="card-header">
-      <span class="card-title">Innkjøpshistorikk</span>
+      <span class="card-title">Innkjøpshistorikk${isStaff ? ' — Supermarked' : ''}</span>
       <div class="spacer"></div>
-      <select style="width:auto" onchange="ST._histType=this.value;renderTab()">
+      ${isStaff ? '' : `<select style="width:auto" onchange="ST._histType=this.value;renderTab()">
         <option value="alle"       ${filterType==='alle'?'selected':''}>Alle leverandører</option>
         <option value="supermarked"${filterType==='supermarked'?'selected':''}>Supermarked</option>
         <option value="kantine"    ${filterType==='kantine'?'selected':''}>Kantine</option>
         <option value="ekstern"    ${filterType==='ekstern'?'selected':''}>Ekstern</option>
-      </select>
+      </select>`}
     </div>
     ${receipts.length === 0 ? '<div class="empty">Ingen kvitteringer funnet</div>' : `
     <table>
