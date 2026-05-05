@@ -579,7 +579,7 @@ function renderNav() {
       label += ` <span style="background:#e53935;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px">${ST._bordBadge}</span>`;
     }
     if (t.id === 'ordre' && ST._fakturaBadge > 0) {
-      label += ` <span style="background:#1565c0;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px" title="Fakturaer klare til å sendes">📄 ${ST._fakturaBadge}</span>`;
+      label += ` <span style="background:#1565c0;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px;white-space:nowrap" title="Fakturaer klare til å sendes">${ST._fakturaBadge}</span>`;
     }
     return `<button class="${ST.tab===t.id?'active':''}" onclick="switchTab('${t.id}')">${label}</button>`;
   }).join('');
@@ -694,22 +694,28 @@ async function buildAvfall() {
       ST._savedDatesCache = savedDates;
     } catch(e) { ST._savedDatesCache = null; }
   }
-  if (ST._posDatesCache != null) {
-    posDates = ST._posDatesCache;
+  // Compute calMonth here so POS fetch can be scoped to just this month
+  const calMonth = ST._wasteHistMonth || logDate.slice(0,7);
+  const [cy, cm] = calMonth.split('-').map(Number);
+
+  if (ST._posDatesMonthCache?.[calMonth] != null) {
+    posDates = ST._posDatesMonthCache[calMonth];
   } else {
     try {
-      const psD = await sbGet('daily_sales?select=sale_date&order=sale_date.desc&limit=1000');
+      const mStart = `${calMonth}-01`;
+      const mLastDay = new Date(cy, cm, 0).getDate();
+      const mEnd = `${calMonth}-${String(mLastDay).padStart(2,'0')}`;
+      const psD = await sbGet(`daily_sales?select=sale_date&sale_date=gte.${mStart}&sale_date=lte.${mEnd}&order=sale_date`);
       const psSet = new Set(psD.map(r => r.sale_date));
-      posDates = [...psSet].sort().reverse();
-      ST._posDatesCache = posDates;
-    } catch(e) { ST._posDatesCache = null; }
+      posDates = [...psSet];
+      if (!ST._posDatesMonthCache) ST._posDatesMonthCache = {};
+      ST._posDatesMonthCache[calMonth] = posDates;
+    } catch(e) {}
   }
 
   // ── 2. Build calendar ────────────────────────────────────────────────────
   const savedDateSet = new Set(savedDates);
   const posDateSet   = new Set(posDates.filter(d => !savedDateSet.has(d)));
-  const calMonth = ST._wasteHistMonth || logDate.slice(0,7);
-  const [cy, cm] = calMonth.split('-').map(Number);
   const prevCM = cm === 1  ? `${cy-1}-12`                         : `${cy}-${String(cm-1).padStart(2,'0')}`;
   const nextCM = cm === 12 ? `${cy+1}-01`                         : `${cy}-${String(cm+1).padStart(2,'0')}`;
   const mNames = ['Januar','Februar','Mars','April','Mai','Juni','Juli','August','September','Oktober','November','Desember'];
@@ -946,7 +952,7 @@ async function saveDagligRapport() {
     if (!ST._savedDates) ST._savedDates = new Set();
     ST._savedDates.add(logDate);
     ST._savedDatesCache = null; // invalidate date cache
-    ST._posDatesCache   = null; // invalidate POS date cache
+    ST._posDatesMonthCache = null; // invalidate per-month POS date cache
     showAlert('Daglig rapport lagret!');
     await renderTab();
   } catch(e) {
@@ -2374,9 +2380,10 @@ async function importSalg() {
     await sbDelete(`daily_sales?sale_date=eq.${saleDate}`);
     await sbPost('daily_sales', rows);
     const newAliasCount = aliasesToSave.length;
-    ST._salgPreviewData  = null;
-    ST._salgPending      = {};
-    ST._salgPendingHusk  = {};
+    ST._salgPreviewData     = null;
+    ST._salgPending         = {};
+    ST._salgPendingHusk     = {};
+    ST._posDatesMonthCache  = null; // refresh calendar POS dots after import
     ST._salgDateFromFile = false;
     showAlert(`${rows.length} salgslinjer importert${newAliasCount > 0 ? ` · ${newAliasCount} ny(e) mappinger lagret` : ''}!`);
     await renderTab();
@@ -4829,16 +4836,20 @@ async function buildInnsikt() {
       if (r.waste_type==='personalmat') wasteByProd[key].personalmat += Number(r.quantity);
     });
 
-    // Also include sold products that have no waste entry so they still appear in the table
+    // Also include daglig-tracked products that were sold but have no waste entry
+    // (excludes made-to-order and untracked POS products)
+    const dagligProductIds = new Set(ST.cafeProducts.filter(p => !p.made_to_order).map(p => p.id));
     const seenWasteKeys = new Set(Object.keys(wasteByProd).map(k => String(k)));
     const soldByKey = {};
     sales.forEach(r => {
       const skey = String(r.cafe_product_id || r.product_name);
       soldByKey[skey] = (soldByKey[skey] || 0) + r.units_sold;
-      if (!seenWasteKeys.has(skey)) {
-        const p = (r.cafe_product_id ? cpMap[r.cafe_product_id] : null) || cpMap[r.product_name?.toLowerCase()];
+      if (!seenWasteKeys.has(skey) && r.cafe_product_id && dagligProductIds.has(r.cafe_product_id)) {
+        const p = cpMap[r.cafe_product_id];
         wasteByProd[skey] = { name: p?.name || r.product_name, kassert:0, g2g:0, personalmat:0, noWaste: true };
         seenWasteKeys.add(skey);
+      } else if (!seenWasteKeys.has(skey)) {
+        soldByKey[skey] = (soldByKey[skey] || 0); // still track for sold count fallback
       }
     });
 
