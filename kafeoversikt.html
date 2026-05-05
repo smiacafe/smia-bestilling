@@ -337,12 +337,23 @@ tr.unmatched td { background: #fff8e6; }
   <div class="login-card">
     <h1>☕ Smia</h1>
     <p>Café oversikt — logg inn for å fortsette</p>
-    <div class="form-row">
-      <label for="pw-input">Passord</label>
-      <input type="password" id="pw-input" placeholder="Skriv inn passord..." onkeydown="if(event.key==='Enter')doLogin()">
-    </div>
-    <div id="login-error" class="alert alert-error" style="display:none;margin-top:8px"></div>
-    <button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="doLogin()">Logg inn</button>
+    <form id="login-form" onsubmit="doLogin();return false;" autocomplete="on">
+      <div class="form-row" style="margin-bottom:10px">
+        <label for="login-role">Rolle</label>
+        <select id="login-role" name="username" autocomplete="username"
+          style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-size:14px;font-family:inherit">
+          <option value="admin">Admin</option>
+          <option value="staff">Ansatt</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label for="pw-input">Passord</label>
+        <input type="password" id="pw-input" name="password" autocomplete="current-password"
+          placeholder="Skriv inn passord...">
+      </div>
+      <div id="login-error" class="alert alert-error" style="display:none;margin-top:8px"></div>
+      <button type="submit" class="btn btn-primary" style="width:100%;margin-top:8px">Logg inn</button>
+    </form>
   </div>
 </div>
 
@@ -4638,18 +4649,24 @@ async function buildInnsikt() {
     const prodStats = {};
     sales.forEach(r => {
       const p   = (r.cafe_product_id ? cpMap[r.cafe_product_id] : null) || cpMap[r.product_name?.toLowerCase()];
-      const pid = r.cafe_product_id;
+      const pid = r.cafe_product_id || p?.id || null;
       const key = pid || r.product_name?.toLowerCase();
       if (!key) return;
-      if (!prodStats[key]) prodStats[key] = { name: p?.name || r.product_name, pid, units: 0, revenue: 0, recipeCost: 0, hasCost: false };
+      if (!prodStats[key]) prodStats[key] = { name: p?.name || r.product_name, pid, units: 0, revenue: 0, recipeCost: 0, hasCost: false, matched: !!p };
       prodStats[key].units      += r.units_sold;
-      prodStats[key].revenue    += p ? p.selling_price * r.units_sold : 0;
-      if (pid && costMap[pid] !== undefined) {
-        prodStats[key].recipeCost += Number(costMap[pid] || 0) * r.units_sold;
-        prodStats[key].hasCost     = hasAnyCostSet(pid);
+      prodStats[key].revenue    += p ? (p.selling_price || 0) * r.units_sold : 0;
+      if (!prodStats[key].matched && !!p) prodStats[key].matched = true;
+      const effectivePid = pid || p?.id;
+      if (effectivePid && costMap[effectivePid] !== undefined) {
+        prodStats[key].recipeCost += Number(costMap[effectivePid] || 0) * r.units_sold;
+        prodStats[key].hasCost     = hasAnyCostSet(effectivePid);
       }
     });
-    const prodStatsArr = Object.values(prodStats).sort((a,b) => b.revenue - a.revenue);
+    // Matched products first (sorted by revenue), then unmatched at the bottom
+    const prodStatsArr = Object.values(prodStats).sort((a,b) => {
+      if (a.matched !== b.matched) return a.matched ? -1 : 1;
+      return b.revenue - a.revenue;
+    });
 
     // Recipe-based cost totals (only for products that have cost data)
     const totalRecipeCost    = prodStatsArr.reduce((s,p) => s + p.recipeCost, 0);
@@ -4757,10 +4774,14 @@ async function buildInnsikt() {
             const db  = p.hasCost ? p.revenue - p.recipeCost : null;
             const pct = p.hasCost && p.revenue > 0 ? (db / p.revenue * 100) : null;
             const col = pct == null ? 'var(--text2)' : pct >= 60 ? '#3B6D11' : pct >= 40 ? '#856404' : '#A32D2D';
-            return `<tr>
-              <td>${esc(p.name)}</td>
+            const unmatchedBg = !p.matched ? 'background:#fff8e1' : '';
+            const nameCell = p.matched
+              ? esc(p.name)
+              : `${esc(p.name)} <span title="Produktet er ikke koblet til et salgsproduktnavn — gå til Salg → Produktmapping og importer på nytt" style="background:#fff3cd;color:#856404;border:1px solid #ffc107;border-radius:4px;padding:1px 5px;font-size:0.72rem;font-weight:600;cursor:help">⚠️ Ikke koblet</span>`;
+            return `<tr style="${unmatchedBg}">
+              <td>${nameCell}</td>
               <td style="text-align:right">${fmtN(p.units)}</td>
-              <td style="text-align:right">${fmt(p.revenue)}</td>
+              <td style="text-align:right">${p.matched ? fmt(p.revenue) : '<span style="color:#856404">—</span>'}</td>
               <td style="text-align:right;color:var(--text2)">${p.hasCost ? fmt(p.recipeCost) : '—'}</td>
               <td style="text-align:right;font-weight:${db!=null?'600':'400'};color:${db!=null?(db>=0?'#3B6D11':'#A32D2D'):'var(--text2)'}">${db!=null?fmt(db):'—'}</td>
               <td style="text-align:right;font-weight:600;color:${col}">${pct!=null?fmtN(pct)+'%':'—'}</td>
@@ -4776,6 +4797,7 @@ async function buildInnsikt() {
           </tr>
         </tbody>
       </table>
+      ${prodStatsArr.some(p => !p.matched) ? `<div style="font-size:0.78rem;color:#856404;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:7px 10px;margin-top:10px">⚠️ Noen produkter er ikke koblet til et salgsprodukt og vises uten omsetning. Gå til <strong>Salg → Produktmapping</strong> og importer POS-filen på nytt for å koble dem.</div>` : ''}
       ${nWithCost < nTotal ? `<div style="font-size:0.78rem;color:#856404;margin-top:8px">⚠️ Varekost og margin vises kun for produkter med oppskrift og ingredienspriser. Legg inn priser under Oppskrifter → Ingredienser.</div>` : ''}`}
     </div>`;
   }
