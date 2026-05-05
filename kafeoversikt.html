@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <!--
 =============================================================
   SMIA CAFÉ OVERSIKT — SQL SETUP (run in Supabase SQL editor)
@@ -538,6 +538,7 @@ async function startApp(role) {
   refreshLagerStatus();
   refreshPendingRequests();
   refreshBordBadge();
+  refreshFakturaBadge();
 }
 
 function getTabs(role) {
@@ -576,6 +577,9 @@ function renderNav() {
     }
     if (t.id === 'bord' && ST._bordBadge > 0) {
       label += ` <span style="background:#e53935;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px">${ST._bordBadge}</span>`;
+    }
+    if (t.id === 'ordre' && ST._fakturaBadge > 0) {
+      label += ` <span style="background:#1565c0;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px" title="Fakturaer klare til å sendes">📄 ${ST._fakturaBadge}</span>`;
     }
     return `<button class="${ST.tab===t.id?'active':''}" onclick="switchTab('${t.id}')">${label}</button>`;
   }).join('');
@@ -3828,6 +3832,7 @@ async function sendAndPrintOrdre(id) {
   await printOrdre(id);
   try {
     await sbPatch(`private_orders?id=eq.${id}`, { status: 'sendt' });
+    refreshFakturaBadge();
     await renderTab();
   } catch(e) {
     showAlert('Skriving OK, men kunne ikke oppdatere status: ' + e.message, 'error');
@@ -4052,6 +4057,14 @@ async function refreshPendingRequests() {
     ST._pendingRequests = rows.length;
     renderNav();
   } catch(e) { ST._pendingRequests = 0; }
+}
+
+async function refreshFakturaBadge() {
+  try {
+    const rows = await sbGet('private_orders?status=eq.utkast&select=id');
+    ST._fakturaBadge = rows.length;
+    renderNav();
+  } catch(e) { ST._fakturaBadge = 0; }
 }
 
 async function refreshBordBadge() {
@@ -4810,10 +4823,23 @@ async function buildInnsikt() {
     const wasteByProd = {};
     waste.forEach(r => {
       const key = r.cafe_product_id || r.product_name;
-      if (!wasteByProd[key]) wasteByProd[key] = { name: r.product_name, kassert:0, g2g:0, personalmat:0 };
+      if (!wasteByProd[key]) wasteByProd[key] = { name: r.product_name, kassert:0, g2g:0, personalmat:0, noWaste: false };
       if (r.waste_type==='kassert')     wasteByProd[key].kassert     += Number(r.quantity);
       if (r.waste_type==='2good2go')    wasteByProd[key].g2g         += Number(r.quantity);
       if (r.waste_type==='personalmat') wasteByProd[key].personalmat += Number(r.quantity);
+    });
+
+    // Also include sold products that have no waste entry so they still appear in the table
+    const seenWasteKeys = new Set(Object.keys(wasteByProd).map(k => String(k)));
+    const soldByKey = {};
+    sales.forEach(r => {
+      const skey = String(r.cafe_product_id || r.product_name);
+      soldByKey[skey] = (soldByKey[skey] || 0) + r.units_sold;
+      if (!seenWasteKeys.has(skey)) {
+        const p = (r.cafe_product_id ? cpMap[r.cafe_product_id] : null) || cpMap[r.product_name?.toLowerCase()];
+        wasteByProd[skey] = { name: p?.name || r.product_name, kassert:0, g2g:0, personalmat:0, noWaste: true };
+        seenWasteKeys.add(skey);
+      }
     });
 
     // Aggregate production + sales by product
@@ -4824,10 +4850,13 @@ async function buildInnsikt() {
     const wasteArr = Object.entries(wasteByProd).map(([key, w]) => {
       const total     = w.kassert + w.g2g + w.personalmat;
       const prod      = prodByProd[key]  || 0;
-      const sold      = salesByProd[key] || 0;
+      const sold      = salesByProd[key] || soldByKey[key] || 0;
       const wasteRate = prod > 0 ? (total / prod * 100) : null;
       return { key, ...w, total, prod, sold, wasteRate };
-    }).sort((a,b) => b.total - a.total);
+    }).sort((a,b) => {
+      if (a.noWaste !== b.noWaste) return a.noWaste ? 1 : -1;
+      return b.total - a.total;
+    });
 
     // Waste-by-product chart data (horizontal bar)
     const wpLabels   = wasteArr.map(w => w.name);
@@ -4873,7 +4902,7 @@ async function buildInnsikt() {
       : wasteArr.map(w => {
           const rateCol = w.wasteRate==null?'#aaa':w.wasteRate>30?'#e53935':w.wasteRate>15?'#e6a817':'#43a047';
           return `<tr style="border-bottom:1px solid var(--bg3)">
-            <td style="padding:8px 6px;font-weight:500">${esc(w.name)}</td>
+            <td style="padding:8px 6px;font-weight:500">${esc(w.name)}${w.noWaste ? ' <span style="font-size:0.72rem;color:#aaa;font-weight:400;font-style:italic">(ingen svinn registrert)</span>' : ''}</td>
             <td style="padding:8px 6px;text-align:center;color:#555">${w.prod>0?fmtN(w.prod):'—'}</td>
             <td style="padding:8px 6px;text-align:center;color:#555">${w.sold>0?fmtN(w.sold):'—'}</td>
             <td style="padding:8px 6px;text-align:center;color:#e53935">${w.kassert>0?fmtN(w.kassert):'—'}</td>
