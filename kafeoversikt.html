@@ -81,12 +81,29 @@ create table purchase_items (
 create table private_orders (
   id bigint primary key generated always as identity,
   customer_name text not null,
+  invoice_to text,
+  contact_name text,
+  org_nr text,
+  invoice_address text,
+  invoice_ref text,
+  email text,
+  delivery_type text,
   order_date date not null,
   delivery_date date,
+  allergies text,
   note text,
   status text default 'utkast' check (status in ('utkast', 'sendt', 'betalt')),
   created_at timestamptz default now()
 );
+-- Run these if the table already exists:
+-- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS invoice_to text;
+-- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS contact_name text;
+-- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS org_nr text;
+-- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS invoice_address text;
+-- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS invoice_ref text;
+-- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS email text;
+-- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS delivery_type text;
+-- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS allergies text;
 
 -- private_order_items: line items on private orders
 create table private_order_items (
@@ -3891,14 +3908,20 @@ async function confirmRequest(id, email, name, invoiceTo) {
     // Pre-fill the order form so user can review and save
     ST._ordreEdit = null;
     ST._ordreFormState = {
-      enhet:    r.invoice_to || '',
-      contact:  r.contact_name || '',
-      date:     r.delivery_date || today(),
-      dateDisp: fmtDate(r.delivery_date || today()),
-      time:     r.delivery_time || '',
-      location: r.delivery_location || '',
-      people:   String(r.num_people || ''),
-      note:     r.note || ''
+      enhet:          r.invoice_to || '',
+      contact:        r.contact_name || '',
+      orgNr:          r.org_nr || '',
+      invoiceAddress: r.invoice_address || '',
+      invoiceRef:     r.invoice_ref || '',
+      email:          r.email || '',
+      deliveryType:   r.delivery_type || '',
+      date:           r.delivery_date || today(),
+      dateDisp:       fmtDate(r.delivery_date || today()),
+      time:           r.delivery_time || '',
+      location:       r.delivery_location || '',
+      people:         String(r.num_people || ''),
+      allergies:      r.allergies || '',
+      note:           r.note || ''
     };
     ST._ordreRows = items.map((i, idx) => {
       const prod = ST.cafeProducts.find(p => p.name === i.name);
@@ -4060,26 +4083,63 @@ function buildOrdreForm() {
 
   const total = rows.reduce((s,r)=>s+(r.total_price||r.total||0),0);
 
-  // Parse "Enhet v/ Kontaktperson" from customer_name
+  // Parse "Enhet v/ Kontaktperson" from customer_name (backward compat)
   const existingName = e2.customer_name || '';
   const vIdx = existingName.indexOf(' v/ ');
-  const existingEnhet   = fs ? fs.enhet   : (vIdx >= 0 ? existingName.slice(0, vIdx) : existingName);
-  const existingContact = fs ? fs.contact : (vIdx >= 0 ? existingName.slice(vIdx + 4) : '');
-  const existingDate    = fs ? fs.date    : (e2.order_date || today());
-  const existingDateDisp = fs ? fs.dateDisp : fmtDate(e2.order_date || today());
-  const existingTime    = fs ? fs.time    : (e2.order_time  || '');
-  const existingLocation = fs ? fs.location : (e2.location  || '');
-  const existingPeople  = fs ? fs.people  : String(e2.num_people || '');
-  const existingNote    = fs ? fs.note    : (e2.note        || '');
+  const existingEnhet        = fs ? fs.enhet        : (e2.invoice_to || (vIdx >= 0 ? existingName.slice(0, vIdx) : existingName));
+  const existingContact      = fs ? fs.contact      : (e2.contact_name || (vIdx >= 0 ? existingName.slice(vIdx + 4) : ''));
+  const existingOrgNr        = fs ? fs.orgNr        : (e2.org_nr || '');
+  const existingInvAddr      = fs ? fs.invoiceAddress : (e2.invoice_address || '');
+  const existingInvRef       = fs ? fs.invoiceRef   : (e2.invoice_ref || '');
+  const existingEmail        = fs ? fs.email        : (e2.email || '');
+  const existingDelivType    = fs ? fs.deliveryType : (e2.delivery_type || '');
+  const existingDate         = fs ? fs.date         : (e2.order_date || today());
+  const existingDateDisp     = fs ? fs.dateDisp     : fmtDate(e2.order_date || today());
+  const existingTime         = fs ? fs.time         : (e2.order_time || '');
+  const existingLocation     = fs ? fs.location     : (e2.location || '');
+  const existingPeople       = fs ? fs.people       : String(e2.num_people || '');
+  const existingAllergies    = fs ? fs.allergies    : (e2.allergies || '');
+  const existingNote         = fs ? fs.note         : (e2.note || '');
+
+  const delivOpts = [
+    { val: '',         lbl: '— Ikke angitt —' },
+    { val: 'serveres', lbl: 'Serveres i bygget' },
+    { val: 'hentes',   lbl: 'Hentes i kafeen' },
+    { val: 'bord',     lbl: '🪑 Bordbooking' },
+  ];
 
   return `
   <div class="card">
     <div class="card-header">
       <span class="card-title">${e2.id ? 'Rediger faktura grunnlag' : 'Nytt faktura grunnlag'}</span>
     </div>
+
+    <div class="section-label">📋 Fakturainformasjon</div>
     <div class="grid2">
-      <div class="form-row"><label>Enhet</label><input id="ordre-enhet" value="${esc(existingEnhet)}" placeholder="f.eks. Kristiansand Kommune"></div>
-      <div class="form-row"><label>v/</label><input id="ordre-contact" value="${esc(existingContact)}" placeholder="Kontaktperson"></div>
+      <div class="form-row"><label>Faktureres til</label><input id="ordre-enhet" value="${esc(existingEnhet)}" placeholder="Organisasjon / virksomhet"></div>
+      <div class="form-row"><label>Org. Nr.</label><input id="ordre-orgnr" value="${esc(existingOrgNr)}" placeholder="f.eks. 123 456 789"></div>
+    </div>
+    <div class="form-row"><label>Fakturaadresse</label><input id="ordre-invaddr" value="${esc(existingInvAddr)}" placeholder="Gateadresse, postnummer og sted"></div>
+    <div class="grid2">
+      <div class="form-row"><label>Kontaktperson</label><input id="ordre-contact" value="${esc(existingContact)}" placeholder="Navn"></div>
+      <div class="form-row"><label>Fakturareferanse</label><input id="ordre-invref" value="${esc(existingInvRef)}" placeholder="f.eks. bestillingsnummer eller navn"></div>
+    </div>
+    <div class="form-row"><label>E-postadresse</label><input type="email" id="ordre-email" value="${esc(existingEmail)}" placeholder="din@epost.no"></div>
+
+    <div class="section-label" style="margin-top:1rem">📍 Levering og tidspunkt</div>
+    <div class="grid2">
+      <div class="form-row"><label>Leveringsmåte</label>
+        <select id="ordre-delivtype">
+          ${delivOpts.map(o=>`<option value="${o.val}" ${existingDelivType===o.val?'selected':''}>${o.lbl}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-row"><label>Sted / rom</label>
+        <input id="ordre-location" list="location-datalist" value="${esc(existingLocation)}" placeholder="f.eks. Seminarrom 2, eller Hentes"
+          onchange="if(ST._pastLocations&&!ST._pastLocations.includes(this.value.trim())&&this.value.trim())ST._pastLocations=[...ST._pastLocations,this.value.trim()].sort((a,b)=>a.localeCompare(b,'nb'))">
+        <datalist id="location-datalist">
+          ${(ST._pastLocations||[]).map(l=>`<option value="${esc(l)}">`).join('')}
+        </datalist>
+      </div>
     </div>
     <div class="grid2">
       <div class="form-row"><label>Dato</label>
@@ -4096,19 +4156,13 @@ function buildOrdreForm() {
       </div>
       <div class="form-row"><label>Tidspunkt</label><input type="time" id="ordre-time" value="${esc(existingTime)}"></div>
     </div>
-    <div class="grid2">
-      <div class="form-row"><label>Sted / rom</label>
-        <input id="ordre-location" list="location-datalist" value="${esc(existingLocation)}" placeholder="f.eks. Seminarrom 2, eller Hentes"
-          onchange="if(ST._pastLocations&&!ST._pastLocations.includes(this.value.trim())&&this.value.trim())ST._pastLocations=[...ST._pastLocations,this.value.trim()].sort((a,b)=>a.localeCompare(b,'nb'))">
-        <datalist id="location-datalist">
-          ${(ST._pastLocations||[]).map(l=>`<option value="${esc(l)}">`).join('')}
-        </datalist>
-      </div>
-      <div class="form-row"><label>Antall personer</label><input type="number" id="ordre-people" min="1" value="${esc(existingPeople)}" placeholder="f.eks. 12"></div>
-    </div>
-    <div class="form-row"><label>Notat</label><textarea id="ordre-note" rows="2">${esc(existingNote)}</textarea></div>
+    <div class="form-row" style="max-width:200px"><label>Antall personer</label><input type="number" id="ordre-people" min="1" value="${esc(existingPeople)}" placeholder="f.eks. 12"></div>
 
-    <div class="section-label" style="margin-top:4px">Produktlinjer</div>
+    <div class="section-label" style="margin-top:1rem">⚠️ Tillegg</div>
+    <div class="form-row"><label>Allergier / matrestriksjoner</label><textarea id="ordre-allergies" rows="2" placeholder="f.eks. nøtteallergi, glutenintoleranse…">${esc(existingAllergies)}</textarea></div>
+    <div class="form-row"><label>Notat / andre ønsker</label><textarea id="ordre-note" rows="2">${esc(existingNote)}</textarea></div>
+
+    <div class="section-label" style="margin-top:1rem">🛒 Produktlinjer</div>
     <div style="display:grid;grid-template-columns:2fr 70px 90px 80px 32px;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:6px">
       <span class="section-label" style="margin:0">Produkt</span>
       <span class="section-label" style="margin:0">Antall</span>
@@ -4131,14 +4185,20 @@ function buildOrdreForm() {
 
 function saveOrdreFormState() {
   ST._ordreFormState = {
-    enhet:    el('ordre-enhet')?.value    ?? '',
-    contact:  el('ordre-contact')?.value  ?? '',
-    date:     el('ordre-date')?.value     || today(),
-    dateDisp: el('ordre-date-display')?.value || '',
-    time:     el('ordre-time')?.value     ?? '',
-    location: el('ordre-location')?.value ?? '',
-    people:   el('ordre-people')?.value   ?? '',
-    note:     el('ordre-note')?.value     ?? ''
+    enhet:          el('ordre-enhet')?.value       ?? '',
+    contact:        el('ordre-contact')?.value     ?? '',
+    orgNr:          el('ordre-orgnr')?.value       ?? '',
+    invoiceAddress: el('ordre-invaddr')?.value     ?? '',
+    invoiceRef:     el('ordre-invref')?.value      ?? '',
+    email:          el('ordre-email')?.value       ?? '',
+    deliveryType:   el('ordre-delivtype')?.value   ?? '',
+    date:           el('ordre-date')?.value        || today(),
+    dateDisp:       el('ordre-date-display')?.value || '',
+    time:           el('ordre-time')?.value        ?? '',
+    location:       el('ordre-location')?.value    ?? '',
+    people:         el('ordre-people')?.value      ?? '',
+    allergies:      el('ordre-allergies')?.value   ?? '',
+    note:           el('ordre-note')?.value        ?? ''
   };
 }
 
@@ -4221,16 +4281,21 @@ function autofillPrice(id, productName) {
 }
 
 async function saveOrdre(id) {
-  const enhet      = el('ordre-enhet')?.value?.trim();
-  const contact    = el('ordre-contact')?.value?.trim();
-  const customer   = enhet + (contact ? ' v/ ' + contact : '');
-  const date       = el('ordre-date')?.value || today();
-  const order_time = el('ordre-time')?.value?.trim() || null;
-  const location   = el('ordre-location')?.value?.trim() || null;
-  const num_people = parseInt(el('ordre-people')?.value) || null;
-  const note       = el('ordre-note')?.value?.trim() || null;
+  const enhet          = el('ordre-enhet')?.value?.trim()    || '';
+  const contact        = el('ordre-contact')?.value?.trim()  || '';
+  const customer       = enhet + (contact ? ' v/ ' + contact : '');
+  const org_nr         = el('ordre-orgnr')?.value?.trim()    || null;
+  const invoice_address = el('ordre-invaddr')?.value?.trim() || null;
+  const invoice_ref    = el('ordre-invref')?.value?.trim()   || null;
+  const email          = el('ordre-email')?.value?.trim()    || null;
+  const delivery_type  = el('ordre-delivtype')?.value        || null;
+  const date           = el('ordre-date')?.value             || today();
+  const order_time     = el('ordre-time')?.value?.trim()     || null;
+  const location       = el('ordre-location')?.value?.trim() || null;
+  const num_people     = parseInt(el('ordre-people')?.value) || null;
+  const allergies      = el('ordre-allergies')?.value?.trim() || null;
+  const note           = el('ordre-note')?.value?.trim()     || null;
 
-  if (!enhet) { showAlert('Enhet er påkrevd', 'error'); return; }
   const rows = (ST._ordreRows||[]).map(r => ({
     product_name: r.product_name || '',
     quantity: parseFloat(r.quantity)||0,
@@ -4241,13 +4306,21 @@ async function saveOrdre(id) {
 
   if (rows.length === 0) { showAlert('Legg til minst én produktlinje', 'error'); return; }
 
+  const payload = {
+    customer_name: customer || '(ikke angitt)',
+    invoice_to:    enhet    || null,
+    contact_name:  contact  || null,
+    org_nr, invoice_address, invoice_ref, email, delivery_type,
+    order_date: date, order_time, location, num_people, allergies, note
+  };
+
   try {
     if (id) {
-      await sbPatch(`private_orders?id=eq.${id}`, { customer_name: customer, order_date: date, order_time, location, num_people, note });
+      await sbPatch(`private_orders?id=eq.${id}`, payload);
       await sbDelete(`private_order_items?order_id=eq.${id}`);
       await sbPost('private_order_items', rows.map(r => ({ ...r, order_id: id })));
     } else {
-      const [order] = await sbPost('private_orders', [{ customer_name: customer, order_date: date, order_time, location, num_people, note }]);
+      const [order] = await sbPost('private_orders', [payload]);
       await sbPost('private_order_items', rows.map(r => ({ ...r, order_id: order.id })));
     }
     ST._ordreEdit = null;
@@ -4310,13 +4383,25 @@ async function printOrdre(id) {
     const totalUten = totalInkl - mvaAmt;
     const outsideHours = mvaRate === 0.15;
 
+    const delivLabel = order.delivery_type === 'serveres' ? 'Serveres i bygget'
+                     : order.delivery_type === 'hentes'   ? 'Hentes i kafeen'
+                     : order.delivery_type === 'bord'     ? 'Bordbooking'
+                     : '';
     el('print-area').innerHTML = `
     <div class="print-header"><h2>FAKTURA GRUNNLAG</h2></div>
     <div class="print-meta">
-      <strong>Til:</strong> ${esc(order.customer_name)}<br>
+      <strong>Faktureres til:</strong> ${esc(order.invoice_to || order.customer_name)}<br>
+      ${order.org_nr          ? `<strong>Org. Nr.:</strong> ${esc(order.org_nr)}<br>` : ''}
+      ${order.invoice_address ? `<strong>Fakturaadresse:</strong> ${esc(order.invoice_address)}<br>` : ''}
+      ${order.contact_name    ? `<strong>Kontaktperson:</strong> ${esc(order.contact_name)}<br>` : ''}
+      ${order.invoice_ref     ? `<strong>Fakturareferanse:</strong> ${esc(order.invoice_ref)}<br>` : ''}
+      ${order.email           ? `<strong>E-post:</strong> ${esc(order.email)}<br>` : ''}
+      <br>
       <strong>Dato:</strong> ${fmtDate(order.order_date)}${order.order_time ? ' kl. ' + esc(order.order_time) : ''}<br>
-      ${order.location   ? `<strong>Sted:</strong> ${esc(order.location)}<br>` : ''}
-      ${order.num_people ? `<strong>Antall personer:</strong> ${order.num_people}<br>` : ''}
+      ${delivLabel            ? `<strong>Leveringsmåte:</strong> ${delivLabel}<br>` : ''}
+      ${order.location        ? `<strong>Sted:</strong> ${esc(order.location)}<br>` : ''}
+      ${order.num_people      ? `<strong>Antall personer:</strong> ${order.num_people}<br>` : ''}
+      ${order.allergies       ? `<strong>Allergier:</strong> ${esc(order.allergies)}<br>` : ''}
     </div>
     <table>
       <thead><tr><th>Produkt</th><th style="text-align:right">Antall</th><th style="text-align:right">Enhetspris</th><th style="text-align:right">Sum</th></tr></thead>
