@@ -4491,6 +4491,9 @@ function getInnsiktRange() {
   if (p.mode === 'all') {
     return { dateFrom: null, dateTo: null, label: 'Totalt (all tid)', chartMode: 'monthly' };
   }
+  if (p.mode === 'day' && p.value) {
+    return { dateFrom: p.value, dateTo: p.value, label: fmtDate(p.value), chartMode: 'daily' };
+  }
   if (p.mode === 'month' && p.value) {
     const [y,m] = p.value.split('-');
     const last = new Date(parseInt(y), parseInt(m), 0);
@@ -4567,6 +4570,9 @@ async function buildInnsikt() {
       <span style="color:var(--border2);margin:0 4px">|</span>
       <input type="month" value="${period.mode==='month'?period.value:nowM}" style="font-size:0.82rem;padding:4px 8px;width:150px"
         onchange="ST._innsiktPeriod={mode:'month',value:this.value};renderTab()">
+      <input type="date" value="${period.mode==='day'?period.value:today()}" style="font-size:0.82rem;padding:4px 8px;width:150px"
+        title="Velg én bestemt dag"
+        onchange="ST._innsiktPeriod={mode:'day',value:this.value};renderTab()">
     </div>
     <div style="margin-top:8px;font-size:0.8rem;color:var(--text2)">Viser: <strong>${esc(label)}</strong>${dateFrom?` (${dateFrom} → ${dateTo||'i dag'})`:''}${sales.length===0?' — ingen salgsdata i perioden':''}</div>
   </div>`;
