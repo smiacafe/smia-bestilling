@@ -715,6 +715,7 @@ async function buildAvfall() {
 
   // ── 2. Build calendar ────────────────────────────────────────────────────
   const savedDateSet = new Set(savedDates);
+  const allPosSet    = new Set(posDates);
   const posDateSet   = new Set(posDates.filter(d => !savedDateSet.has(d)));
   const prevCM = cm === 1  ? `${cy-1}-12`                         : `${cy}-${String(cm-1).padStart(2,'0')}`;
   const nextCM = cm === 12 ? `${cy+1}-01`                         : `${cy}-${String(cm+1).padStart(2,'0')}`;
@@ -730,8 +731,9 @@ async function buildAvfall() {
       calRows += '<td style="padding:4px"></td>';
     } else {
       const ds = `${cy}-${String(cm).padStart(2,'0')}-${String(calDay).padStart(2,'0')}`;
-      const hasData = savedDateSet.has(ds);
-      const isPOS   = !hasData && posDateSet.has(ds);
+      const hasData    = savedDateSet.has(ds);
+      const isPOS      = !hasData && posDateSet.has(ds);
+      const missingPOS = hasData && !allPosSet.has(ds);
       const isSel   = logDate === ds;
       const isToday = ds === today();
       // Background always reflects data status — selection/today shown via border ring only
@@ -745,9 +747,9 @@ async function buildAvfall() {
         style="text-align:center;padding:5px 2px;border-radius:7px;cursor:pointer;
                background:${bg};color:${col};font-weight:${hasData||isToday||isPOS||isSel?'700':'400'};
                border:${border};box-sizing:border-box"
-        title="${hasData ? fmtDate(ds)+': Rapport lagret' : isPOS ? fmtDate(ds)+': POS-data, mangler daglig rapport' : fmtDate(ds)}">
+        title="${hasData ? fmtDate(ds)+(missingPOS ? ': Rapport lagret – POS ikke lastet opp' : ': Rapport lagret') : isPOS ? fmtDate(ds)+': POS-data, mangler daglig rapport' : fmtDate(ds)}">
         <div style="font-size:0.9rem">${calDay}</div>
-        ${hasData ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>`
+        ${hasData ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>${missingPOS ? `<div style="font-size:0.52rem;background:#ede7f6;color:#6a1b9a;border-radius:2px;padding:0 2px;margin-top:1px;font-weight:700;line-height:1.4">POS</div>` : ''}`
                   : isPOS ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.9">POS</div>`
                   : '<div style="font-size:0.62rem">&nbsp;</div>'}
       </td>`;
