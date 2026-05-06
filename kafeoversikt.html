@@ -803,13 +803,29 @@ async function buildAvfall() {
     .filter(p => !p.made_to_order)
     .sort((a, b) => (usageCounts[b.id]||0) - (usageCounts[a.id]||0));
 
-  // ── 4. Fetch POS sales for selected date ─────────────────────────────────
+  // ── 4. Fetch POS sales + bord bestilling items for selected date ───────────
   ST._todaySales = {};
+  let _posSalesCount = 0, _bordSalesTotal = 0, _bordOrderCount = 0;
   try {
     const sales = await sbGet(`daily_sales?sale_date=eq.${logDate}`);
+    _posSalesCount = sales.length;
     sales.forEach(s => {
       if (s.cafe_product_id) ST._todaySales[s.cafe_product_id] = (ST._todaySales[s.cafe_product_id] || 0) + s.units_sold;
       ST._todaySales[s.product_name] = (ST._todaySales[s.product_name] || 0) + s.units_sold;
+    });
+  } catch(e) {}  
+  // Also include items from private orders (bord bestillinger) delivered on this date
+  try {
+    const bordOrders = await sbGet(`private_orders?delivery_date=eq.${logDate}&select=*,private_order_items(*)`);
+    _bordOrderCount = bordOrders.length;
+    bordOrders.forEach(order => {
+      (order.private_order_items || []).forEach(item => {
+        const qty = Number(item.quantity) || 0;
+        if (qty <= 0) return;
+        if (item.cafe_product_id) ST._todaySales[item.cafe_product_id] = (ST._todaySales[item.cafe_product_id] || 0) + qty;
+        if (item.product_name) ST._todaySales[item.product_name] = (ST._todaySales[item.product_name] || 0) + qty;
+        _bordSalesTotal += qty;
+      });
     });
   } catch(e) {}
 
@@ -832,9 +848,13 @@ async function buildAvfall() {
   }
 
   // ── 6. Build rapport form ─────────────────────────────────────────────────
-  const noSalesNote = Object.keys(ST._todaySales).length === 0
-    ? `<div style="font-size:0.8rem;color:#856404;background:#fff9ee;border:1px solid #e6d5a0;border-radius:6px;padding:6px 10px;margin-bottom:10px">
-        ⚠️ Ingen POS-salgsdata for denne datoen — «Solgt»-kolonnen viser 0.
+  const noSalesNote = _posSalesCount === 0
+    ? `<div style="font-size:0.8rem;color:#856404;background:#fff9ee;border:1px solid #e6d5a0;border-radius:6px;padding:6px 10px;margin-bottom:6px">
+        ⚠️ Ingen POS-salgsdata for denne datoen — «Solgt»-kolonnen viser kun bordbookinger.
+       </div>` : '';
+  const bordNote = _bordSalesTotal > 0
+    ? `<div style="font-size:0.8rem;color:#1565c0;background:#e3f2fd;border:1px solid #90caf9;border-radius:6px;padding:6px 10px;margin-bottom:6px">
+        🪑  enhet fra  bordbooking er inkludert i «Solgt»-kolonnen.
        </div>` : '';
 
   const rows = products.length === 0
@@ -890,7 +910,7 @@ async function buildAvfall() {
       <button onclick="ST._wasteState={_date:'${nextDs}'};renderTab()"
         style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:1rem" title="Neste dag">›</button>
     </div>
-    ${noSalesNote}
+    ${noSalesNote}${bordNote}
     <div style="overflow-x:auto">
       <table style="min-width:600px">
         <thead>
