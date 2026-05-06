@@ -1635,7 +1635,7 @@ async function importKantineOrder(orderId) {
 
     // Auto-produce: create production_log entries for products with auto_canteen_produce = true
     try {
-      const deliveryDate = (order.delivered_at || order.created_at || today()).slice(0,10);
+      const deliveryDate = receiptDate; // use the staff-selected receipt date, not order created_at
       const ingIds = itemsToInsert.map(i => i.ingredient_id).filter(Boolean);
       if (ingIds.length > 0) {
         const recipeItems = await sbGet(`recipe_items?ingredient_id=in.(${ingIds.join(',')})&select=cafe_product_id,ingredient_id,quantity`);
@@ -4591,7 +4591,7 @@ async function buildInnsikt() {
   let sales = [], purchases = [], waste = [], privateOrders = [], prodLog = [], recipeRows = [];
   [sales, purchases, waste, privateOrders, prodLog, recipeRows] = await Promise.all([
     sbGet(`daily_sales?select=*${dateFilter('sale_date')}`).catch(()=>[]),
-    sbGet(`purchase_receipts?select=*,purchase_items(total_price,unit_price,quantity)${dateFilter('receipt_date')}`).catch(()=>[]),
+    sbGet(`purchase_receipts?select=*,bestillinger_order_id,purchase_items(total_price,unit_price,quantity)${dateFilter('receipt_date')}`).catch(()=>[]),
     sbGet(`waste_log?select=*${dateFilter('log_date')}`).catch(()=>[]),
     sbGet(`private_orders?select=*,private_order_items(*)${dateFilter('order_date')}`).catch(()=>[]),
     sbGet(`production_log?select=*${dateFilter('log_date')}`).catch(()=>[]),
@@ -4890,6 +4890,42 @@ async function buildInnsikt() {
     const prodByProd = {}, salesByProd = {};
     prodLog.forEach(r => { if(r.cafe_product_id) prodByProd[r.cafe_product_id]  = (prodByProd[r.cafe_product_id]||0)  + Number(r.quantity_produced); });
     sales.forEach(r   => { if(r.cafe_product_id) salesByProd[r.cafe_product_id] = (salesByProd[r.cafe_product_id]||0) + r.units_sold; });
+    // For auto_canteen_produce products: also derive production from delivered kantine orders
+    // that have NOT already been imported via the manual sync (to avoid double-counting).
+    // This lets products like sjokolade cookies show production without requiring a manual sync.
+    try {
+      const autoCanteenIds = new Set(ST.cafeProducts.filter(p => p.auto_canteen_produce).map(p => p.id));
+      if (autoCanteenIds.size > 0) {
+        // Build map: canteen_product_id → ingredient_id
+        const kantineIngMap = {};
+        (ST.ingredients || []).forEach(i => { if (i.canteen_product_id) kantineIngMap[i.canteen_product_id] = i.id; });
+
+        // Build map: ingredient_id → cafe_product_id (auto_canteen_produce only)
+        const ingToCp = {};
+        recipeRows.forEach(r => { if (autoCanteenIds.has(r.cafe_product_id) && r.ingredients?.id) ingToCp[r.ingredients.id] = r.cafe_product_id; });
+
+        if (Object.keys(ingToCp).length > 0) {
+          // IDs of orders already synced (have a purchase_receipt) — skip to avoid double-counting
+          const syncedOrderIds = new Set(receipts.filter(r => r.bestillinger_order_id).map(r => r.bestillinger_order_id));
+
+          let oQ = `orders?status=eq.delivered&select=id,items,created_at`;
+          if (dateFrom) oQ += `&created_at=gte.${dateFrom}`;
+          if (dateTo)   oQ += `&created_at=lte.${dateTo}T23:59:59`;
+          const kantineOrders = await sbGet(oQ).catch(() => []);
+
+          kantineOrders.forEach(order => {
+            if (syncedOrderIds.has(order.id)) return; // already in production_log via sync
+            (Array.isArray(order.items) ? order.items : []).forEach(item => {
+              const ingId = kantineIngMap[item.pid];
+              if (!ingId) return;
+              const cpId = ingToCp[ingId];
+              if (!cpId) return;
+              prodByProd[cpId] = (prodByProd[cpId] || 0) + (item.qty || 0);
+            });
+          });
+        }
+      }
+    } catch(e) { /* kantine-order production is best-effort */ }
 
     const wasteArr = Object.entries(wasteByProd).map(([key, w]) => {
       const total     = w.kassert + w.g2g + w.personalmat;
