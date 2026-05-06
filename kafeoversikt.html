@@ -637,20 +637,20 @@ function updateWasteState(key, val) {
 
 function stepWaste(key, delta) {
   const current = parseFloat(ST._wasteState[key]) || 0;
-  const next = Math.max(0, current + delta);
+  const next = Math.max(0, Math.round((current + delta) * 10) / 10);
   ST._wasteState[key] = String(next);
   const inp = document.getElementById('wi-' + key);
   if (inp) { inp.value = next; updateAvstemming(); }
 }
 
-function stepper(key, color, borderCol, bgCol) {
+function stepper(key, color, borderCol, bgCol, step = 1) {
   const val = ST._wasteState[key] || '0';
   return `<div style="display:flex;align-items:center;gap:2px;justify-content:center">
-    <button onmousedown="stepWaste('${key}',-1)" style="width:26px;height:26px;border:1px solid ${borderCol};background:${bgCol};border-radius:5px;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0">−</button>
-    <input type="number" min="0" step="1" value="${esc(String(val))}"
-      id="wi-${key}" style="text-align:center;border-color:${borderCol};width:38px;padding:3px 2px;font-size:0.9rem"
+    <button onmousedown="stepWaste('${key}',-step)" style="width:26px;height:26px;border:1px solid ${borderCol};background:${bgCol};border-radius:5px;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0">−</button>
+    <input type="number" min="0" step="${step}" value="${esc(String(val))}"
+      id="wi-${key}" style="text-align:center;border-color:${borderCol};width:${step<1?46:38}px;padding:3px 2px;font-size:0.9rem"
       onchange="updateWasteState('${key}',this.value);updateAvstemming()">
-    <button onmousedown="stepWaste('${key}',1)" style="width:26px;height:26px;border:1px solid ${borderCol};background:${bgCol};border-radius:5px;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0">+</button>
+    <button onmousedown="stepWaste('${key}',step)" style="width:26px;height:26px;border:1px solid ${borderCol};background:${bgCol};border-radius:5px;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0">+</button>
   </div>`;
 }
 
@@ -793,9 +793,17 @@ async function buildAvfall() {
   const usageCounts = {};
   try {
     const since = new Date(Date.now() - 60*24*60*60*1000).toISOString().slice(0,10);
-    const usageRows = await sbGet(`daily_sales?sale_date=gte.${since}&select=cafe_product_id`);
+    const [usageRows, bordRows] = await Promise.all([
+      sbGet(`daily_sales?sale_date=gte.${since}&select=cafe_product_id`),
+      sbGet(`private_orders?order_date=gte.${since}&select=private_order_items(cafe_product_id)`)
+    ]);
     usageRows.forEach(r => {
       if (r.cafe_product_id) usageCounts[r.cafe_product_id] = (usageCounts[r.cafe_product_id]||0) + 1;
+    });
+    bordRows.forEach(o => {
+      (o.private_order_items||[]).forEach(i => {
+        if (i.cafe_product_id) usageCounts[i.cafe_product_id] = (usageCounts[i.cafe_product_id]||0) + 1;
+      });
     });
   } catch(e) {}
 
@@ -872,14 +880,15 @@ async function buildAvfall() {
                      : (uforklart > 0 ? '+' : '') + fmtN(uforklart);
         const unused = (usageCounts[p.id]||0) === 0;
         const autoKantine = p.auto_canteen_produce;
+        const halfStep = p.name.toLowerCase().includes('kaffekanne') ? 0.5 : 1;
         return `
         <tr style="border-bottom:1px solid var(--bg3)${unused ? ';opacity:0.4' : ''}${autoKantine ? ';background:#f0f6ff' : ''}">
           <td style="font-weight:500;padding:6px 4px">${autoKantine ? '🏢 ' : ''}${esc(p.name)}</td>
-          <td style="padding:4px 2px">${stepper('wp_'+p.id,'#4a90d9','#a8c8f0','#e8f0fb')}</td>
+          <td style="padding:4px 2px">${stepper('wp_'+p.id,'#4a90d9','#a8c8f0','#e8f0fb',halfStep)}</td>
           <td style="text-align:center;padding:4px;font-weight:500;color:var(--text2)">${fmtN(sold)}</td>
-          <td style="padding:4px 2px">${stepper('wk_'+p.id,'','#e8c0c0','#fcebeb')}</td>
-          <td style="padding:4px 2px">${stepper('wg_'+p.id,'','#b8dba0','#eaf3de')}</td>
-          <td style="padding:4px 2px">${stepper('wm_'+p.id,'','#f0d0a0','#fdf3e3')}</td>
+          <td style="padding:4px 2px">${stepper('wk_'+p.id,'','#e8c0c0','#fcebeb',halfStep)}</td>
+          <td style="padding:4px 2px">${stepper('wg_'+p.id,'','#b8dba0','#eaf3de',halfStep)}</td>
+          <td style="padding:4px 2px">${stepper('wm_'+p.id,'','#f0d0a0','#fdf3e3',halfStep)}</td>
           <td style="text-align:center;padding:4px;font-weight:600;color:${uColor}" id="avst-${p.id}">${uText}</td>
         </tr>`;
       }).join('');
@@ -3747,11 +3756,17 @@ async function finaliseBordOrder(requestId) {
 
     // Create private order
     const [order] = await sbPost('private_orders', [{
-      customer_name: r.invoice_to || 'Ukjent',
-      order_date:    today(),
-      delivery_date: r.delivery_date || today(),
-      note:          (r.contact_name ? 'v/ ' + r.contact_name + (r.note ? ' — ' : '') : '') + (r.note || '') + ' [Bordbooking]',
-      status: 'utkast'
+      customer_name:  r.invoice_to || r.contact_name || 'Ukjent',
+      invoice_to:     r.invoice_to || null,
+      contact_name:   r.contact_name || null,
+      email:          r.email || null,
+      order_date:     r.delivery_date || today(),
+      order_time:     r.delivery_time || null,
+      delivery_date:  r.delivery_date || today(),
+      delivery_type:  'bord',
+      num_people:     r.num_people || null,
+      note:           r.note || null,
+      status:         'utkast'
     }]);
 
     // Insert order items
@@ -3769,13 +3784,8 @@ async function finaliseBordOrder(requestId) {
 
     // Jump straight to the new order in the Ordre tab (admin only)
     if (ST.role === 'admin') {
-      ST._ordreEdit = null;
-      ST._ordreFormState = {
-        enhet: r.invoice_to || '', contact: r.contact_name || '',
-        date: r.delivery_date || today(), dateDisp: fmtDate(r.delivery_date || today()),
-        time: r.delivery_time || '', location: '', people: String(r.num_people || ''),
-        note: (r.contact_name ? 'v/ ' + r.contact_name + ' — ' : '') + (r.note || '') + ' [Bordbooking]'
-      };
+      ST._ordreEdit = order;
+      ST._ordreFormState = null;
       ST._ordreRows = rows.map((row, idx) => ({ id: Date.now() + idx, ...row }));
       ST.tab = 'ordre';
       ST.subTab.ordre = 'ny';
@@ -4441,7 +4451,7 @@ async function printOrdre(id) {
                      : order.delivery_type === 'bord'     ? 'Bordbooking'
                      : '';
     el('print-area').innerHTML = `
-    <div class="print-header"><h2>FAKTURA GRUNNLAG</h2></div>
+    <div class="print-header"><h2>FAKTURA GRUNNLAG</h2><div style="font-size:13px;color:#888;margin-top:3px;font-weight:400">Ordrenr. #${order.id}</div></div>
     <div class="print-meta">
       <strong>Faktureres til:</strong> ${esc(order.invoice_to || order.customer_name)}<br>
       ${order.org_nr          ? `<strong>Org. Nr.:</strong> ${esc(order.org_nr)}<br>` : ''}
