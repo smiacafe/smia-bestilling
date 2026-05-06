@@ -4451,8 +4451,9 @@ async function printOrdre(id) {
                      : order.delivery_type === 'bord'     ? 'Bordbooking'
                      : '';
     el('print-area').innerHTML = `
-    <div class="print-header"><h2>FAKTURA GRUNNLAG</h2><div style="font-size:13px;color:#888;margin-top:3px;font-weight:400">Ordrenr. #${order.id}</div></div>
+    <div class="print-header"><h2>FAKTURA GRUNNLAG</h2></div>
     <div class="print-meta">
+      <strong>Ordrenr.:</strong> #${order.id}<br><br>
       <strong>Faktureres til:</strong> ${esc(order.invoice_to || order.customer_name)}<br>
       ${order.org_nr          ? `<strong>Org. Nr.:</strong> ${esc(order.org_nr)}<br>` : ''}
       ${order.invoice_address ? `<strong>Fakturaadresse:</strong> ${esc(order.invoice_address)}<br>` : ''}
