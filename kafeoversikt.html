@@ -4896,9 +4896,16 @@ async function buildInnsikt() {
     try {
       const autoCanteenIds = new Set(ST.cafeProducts.filter(p => p.auto_canteen_produce).map(p => p.id));
       if (autoCanteenIds.size > 0) {
-        // Build map: canteen_product_id → ingredient_id
+        // Build map: kantine product id → ingredient_id
+        // Primary: via canteen_product_id field set during sync
+        // Fallback: name matching (for ingredients never synced)
         const kantineIngMap = {};
         (ST.ingredients || []).forEach(i => { if (i.canteen_product_id) kantineIngMap[i.canteen_product_id] = i.id; });
+        (ST.kantineProducts || []).forEach(kp => {
+          if (kantineIngMap[kp.id] != null) return; // already mapped via canteen_product_id
+          const match = (ST.ingredients || []).find(i => i.name.toLowerCase() === kp.name.toLowerCase());
+          if (match) kantineIngMap[kp.id] = match.id;
+        });
 
         // Build map: ingredient_id → cafe_product_id (auto_canteen_produce only)
         const ingToCp = {};
@@ -4920,7 +4927,11 @@ async function buildInnsikt() {
               if (!ingId) return;
               const cpId = ingToCp[ingId];
               if (!cpId) return;
-              prodByProd[cpId] = (prodByProd[cpId] || 0) + (item.qty || 0);
+              // effective qty: sum splits if present, otherwise item.qty
+              const qty = (item.splits && item.splits.length > 0)
+                ? item.splits.reduce((s, sp) => s + (sp.qty || 0), 0)
+                : (item.qty || 0);
+              if (qty > 0) prodByProd[cpId] = (prodByProd[cpId] || 0) + qty;
             });
           });
         }
