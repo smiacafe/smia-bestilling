@@ -5427,7 +5427,7 @@ async function buildLager() {
       sbGet(`daily_sales?cafe_product_id=in.(${idList})&select=cafe_product_id,units_sold`),
       sbGet(`waste_log?cafe_product_id=in.(${idList})&select=cafe_product_id,quantity`),
       sbGet(`stock_adjustments?cafe_product_id=in.(${idList})&select=*&order=adjustment_date.desc`),
-      sbGet(`recipe_items?select=cafe_product_id,ingredients(id)`)
+      sbGet(`recipe_items?select=cafe_product_id,ingredient_id`)
     ]);
   } catch(e) { console.warn('Lager fetch error:', e); }
 
@@ -5444,7 +5444,7 @@ async function buildLager() {
         if (match) kantineIngMap[kp.id] = match.id;
       });
       const ingToCp = {};
-      recipeRows.forEach(r => { if (canteenProdIds.has(r.cafe_product_id) && r.ingredients?.id) ingToCp[r.ingredients.id] = r.cafe_product_id; });
+      recipeRows.forEach(r => { if (canteenProdIds.has(r.cafe_product_id) && r.ingredient_id) ingToCp[r.ingredient_id] = r.cafe_product_id; });
 
       if (Object.keys(ingToCp).length > 0) {
         const kantineOrders = await sbGet('orders?status=in.(delivered,accepted)&select=id,items').catch(() => []);
