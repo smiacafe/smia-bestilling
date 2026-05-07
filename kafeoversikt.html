@@ -4336,7 +4336,7 @@ function calcOrdreRow(id) {
 
 function updateOrdreRowTotal(id, val) {
   const row = (ST._ordreRows||[]).find(r => r.id === id);
-  if (row) row.total_price = parseFloat(String(val).replace(/\s/g,'').replace(',','.'​')) || 0;
+  if (row) row.total_price = parseFloat(String(val).replace(/\s/g,'').replace(',','.'')) || 0;
   updateOrdreGrandTotal();
 }
 
