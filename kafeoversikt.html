@@ -2746,6 +2746,12 @@ function buildIngModal() {
       </div>
     </div>
 
+    <div class="form-row" id="ing-min-stock-row" style="${isKantine?'':'display:none'}">
+      <label>Min. lager <span style="font-size:0.8rem;color:var(--text2)">(vises i Lager-fanen)</span></label>
+      <input type="number" id="ing-min-stock" min="0" step="1"
+        value="${i.min_stock ?? ''}" placeholder="Ikke satt" style="width:140px">
+    </div>
+
     <div class="section-label" style="margin:12px 0 4px">Innkjøp</div>
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px">
       <div style="font-size:0.82rem;color:var(--text2);margin-bottom:10px">Fyll inn hva du betalte og hvor mye du fikk:</div>
@@ -2793,6 +2799,8 @@ function ingCatChanged() {
   const cat = document.getElementById('ing-cat')?.value;
   const kantineRow = document.getElementById('ing-kantine-row');
   if (kantineRow) kantineRow.style.display = cat === 'kantine' ? '' : 'none';
+  const minStockRow = document.getElementById('ing-min-stock-row');
+  if (minStockRow) minStockRow.style.display = cat === 'kantine' ? '' : 'none';
   if (cat !== 'kantine') {
     const kantineSelect = document.getElementById('ing-kantine-id');
     if (kantineSelect) kantineSelect.value = '';
@@ -2905,6 +2913,8 @@ async function saveIngredient(id) {
   const unitsPerPurchase = parseFloat((el('ing-units-per-purchase')?.value||'1').replace(/\s/g,'').replace(',','.')) || 1;
   const costPerUnit  = unitsPerPurchase > 0 ? purchasePrice / unitsPerPurchase : 0;
   const kantineId    = el('ing-kantine-id')?.value ? parseInt(el('ing-kantine-id').value) : null;
+  const minStockVal  = el('ing-min-stock')?.value?.trim();
+  const min_stock    = minStockVal !== '' && minStockVal != null ? parseFloat(minStockVal) : null;
 
   const modalErr = document.getElementById('ing-modal-error');
   if (!name) { if(modalErr) modalErr.textContent = 'Navn er påkrevd'; return; }
@@ -2918,7 +2928,8 @@ async function saveIngredient(id) {
     purchase_price: purchasePrice,
     units_per_purchase: unitsPerPurchase,
     cost_per_unit: costPerUnit,
-    canteen_product_id: kantineId
+    canteen_product_id: kantineId,
+    min_stock
   };
 
   try {
@@ -5601,8 +5612,104 @@ async function buildLager() {
         Min. lager settes i produktinnstillingene (Oppskrifter → Salgsprodukter → rediger produkt).
       </p>
     </div>
+    ${await buildIngLager()}
     ${buildStockCountModal()}`;
 }
+async function buildIngLager() {
+  const lagerIngs = ST.ingredients.filter(i => i.min_stock != null && i.canteen_product_id != null);
+  if (lagerIngs.length === 0) return '';
+
+  const ingIds    = lagerIngs.map(i => i.id);
+  const ingIdList = ingIds.join(',');
+
+  let purchaseItems = [], ingRecipeItems = [];
+  try {
+    [purchaseItems, ingRecipeItems] = await Promise.all([
+      sbGet(`purchase_items?ingredient_id=in.(${ingIdList})&select=ingredient_id,quantity`),
+      sbGet(`recipe_items?ingredient_id=in.(${ingIdList})&select=cafe_product_id,ingredient_id,quantity`)
+    ]);
+  } catch(e) { console.warn('Ingredient lager fetch error:', e); }
+
+  const receivedIngMap = {};
+  purchaseItems.forEach(r => { receivedIngMap[r.ingredient_id] = (receivedIngMap[r.ingredient_id] || 0) + Number(r.quantity || 0); });
+
+  const usedIngMap = {};
+  if (ingRecipeItems.length > 0) {
+    const relatedCpIds = [...new Set(ingRecipeItems.map(r => r.cafe_product_id))];
+    let prodLogs = [];
+    try { prodLogs = await sbGet(`production_log?cafe_product_id=in.(${relatedCpIds.join(',')})&select=cafe_product_id,quantity_produced`); } catch(e) {}
+    const prodMap = {};
+    prodLogs.forEach(r => { prodMap[r.cafe_product_id] = (prodMap[r.cafe_product_id] || 0) + Number(r.quantity_produced || 0); });
+    ingRecipeItems.forEach(r => {
+      const used = (prodMap[r.cafe_product_id] || 0) * Number(r.quantity || 0);
+      usedIngMap[r.ingredient_id] = (usedIngMap[r.ingredient_id] || 0) + used;
+    });
+  }
+
+  let alertCount = 0;
+  const rows = lagerIngs.map(i => {
+    const unit     = i.recipe_unit || i.unit || 'stk';
+    const received = Math.round((receivedIngMap[i.id] || 0) * 100) / 100;
+    const used     = Math.round((usedIngMap[i.id]     || 0) * 100) / 100;
+    const stock    = Math.round((received - used)      * 100) / 100;
+    const minStock = Number(i.min_stock);
+
+    let statusHtml, rowBg = '';
+    if (stock <= 0) {
+      statusHtml = '<span style="background:#e53935;color:#fff;border-radius:4px;padding:2px 9px;font-size:0.8rem;font-weight:600">🔴 Tomt</span>';
+      rowBg = 'background:#fff5f5;'; alertCount++;
+    } else if (stock < minStock) {
+      statusHtml = '<span style="background:#e6a817;color:#fff;border-radius:4px;padding:2px 9px;font-size:0.8rem;font-weight:600">🟡 Lavt</span>';
+      rowBg = 'background:#fffbef;'; alertCount++;
+    } else {
+      statusHtml = '<span style="background:#43a047;color:#fff;border-radius:4px;padding:2px 9px;font-size:0.8rem;font-weight:600">🟢 OK</span>';
+    }
+
+    const stockDisplay = stock <= 0
+      ? `<strong style="color:#e53935;font-size:1.1rem">${stock}</strong>`
+      : `<strong style="font-size:1.1rem">${stock}</strong>`;
+
+    return `<tr style="border-bottom:1px solid var(--bg3);${rowBg}">
+      <td style="padding:10px 8px;font-weight:500">🧂 ${esc(i.name)}</td>
+      <td style="padding:10px 8px;text-align:center;color:#555">${received} ${esc(unit)}</td>
+      <td style="padding:10px 8px;text-align:center;color:#555">${used} ${esc(unit)}</td>
+      <td style="padding:10px 8px;text-align:center">${stockDisplay} ${esc(unit)}</td>
+      <td style="padding:10px 8px;text-align:center;color:#555">${minStock} ${esc(unit)}</td>
+      <td style="padding:10px 8px;text-align:center">${statusHtml}</td>
+    </tr>`;
+  });
+
+  const alertBanner = alertCount > 0 ? `
+    <div style="background:#fff3cd;border:1px solid #e6a817;border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:0.9rem">
+      ⚠️ <strong>${alertCount} ingrediens${alertCount > 1 ? 'er' : ''}</strong> er under minimumsbeholdning.
+    </div>` : '';
+
+  return `
+    <div style="padding:0 16px 16px;max-width:960px;margin-top:32px">
+      <h2 style="margin:0 0 12px;font-size:1.2rem">🧂 Ingredienser (kantine)</h2>
+      ${alertBanner}
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;min-width:480px">
+          <thead>
+            <tr style="background:var(--bg2);color:#666;font-size:0.78rem;text-transform:uppercase">
+              <th style="padding:8px;text-align:left">Ingrediens</th>
+              <th style="padding:8px;text-align:center">Mottatt</th>
+              <th style="padding:8px;text-align:center">Brukt</th>
+              <th style="padding:8px;text-align:center">På lager</th>
+              <th style="padding:8px;text-align:center">Min. lager</th>
+              <th style="padding:8px;text-align:center">Status</th>
+            </tr>
+          </thead>
+          <tbody>${rows.join('')}</tbody>
+        </table>
+      </div>
+      <p style="margin-top:12px;font-size:0.82rem;color:#aaa">
+        💡 Mottatt = innkjøp registrert fra kantine · Brukt = beregnet fra produksjonslogg og oppskrift ·
+        Min. lager settes i Oppskrifter → Ingredienser → rediger.
+      </p>
+    </div>`;
+}
+
 function openStockCount(productId, currentStock) {
   ST._stockCountModal = { productId, currentStock };
   renderTab();
