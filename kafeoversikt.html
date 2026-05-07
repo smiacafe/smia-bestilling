@@ -4152,7 +4152,12 @@ function buildOrdreForm() {
         onchange="updateOrdreRow(${r.id},'quantity',this.value);calcOrdreRow(${r.id})">
       <input type="text" inputmode="decimal" placeholder="Enhetspris" value="${esc(String(r.unit_price||r.unitPrice||0))}"
         onchange="updateOrdreRow(${r.id},'unit_price',this.value);calcOrdreRow(${r.id})">
-      <span style="text-align:right;padding:0 4px;font-size:13px;color:var(--text2)" id="or-total-${r.id}">${fmt(r.total_price||r.total||0)}</span>
+      <input type="text" inputmode="decimal" id="or-total-${r.id}"
+        value="${fmtN(r.total_price||r.total||0)}"
+        placeholder="Total"
+        title="Rediger for å overstyre totalpris for denne linjen"
+        style="text-align:right;font-size:13px;color:var(--text2);width:90px"
+        onchange="updateOrdreRowTotal(${r.id},this.value)">
       <button class="btn btn-sm btn-danger btn-icon" onclick="removeOrdreRow(${r.id})">✕</button>
     </div>`).join('');
 
@@ -4325,8 +4330,17 @@ function calcOrdreRow(id) {
   const up  = parseFloat(String(row.unit_price ?? row.unitPrice ?? '').replace(',', '.')) || 0;
   row.total_price = qty * up;
   const tEl = el('or-total-' + id);
-  if (tEl) tEl.textContent = fmt(row.total_price);
-  // Update grand total
+  if (tEl) tEl.value = fmtN(row.total_price);
+  updateOrdreGrandTotal();
+}
+
+function updateOrdreRowTotal(id, val) {
+  const row = (ST._ordreRows||[]).find(r => r.id === id);
+  if (row) row.total_price = parseFloat(String(val).replace(/\s/g,'').replace(',','.'​')) || 0;
+  updateOrdreGrandTotal();
+}
+
+function updateOrdreGrandTotal() {
   const grandTotal = (ST._ordreRows||[]).reduce((s,r) => s + (r.total_price||0), 0);
   const gtEl = el('ordre-grand-total');
   if (gtEl) gtEl.textContent = fmt(grandTotal);
@@ -4375,7 +4389,7 @@ async function saveOrdre(id) {
     product_name: r.product_name || '',
     quantity: parseFloat(r.quantity)||0,
     unit_price: parseFloat(r.unit_price)||0,
-    total_price: (parseFloat(r.quantity)||0)*(parseFloat(r.unit_price)||0),
+    total_price: (r.total_price != null && r.total_price !== 0) ? Number(r.total_price) : (parseFloat(r.quantity)||0)*(parseFloat(r.unit_price)||0),
     cafe_product_id: ST.cafeProducts.find(p=>p.name.toLowerCase()===(r.product_name||'').toLowerCase())?.id || null
   })).filter(r => r.product_name && r.quantity > 0);
 
