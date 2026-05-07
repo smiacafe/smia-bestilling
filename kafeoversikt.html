@@ -338,9 +338,10 @@ tr.unmatched td { background: #fff8e6; }
     <h1>☕ Smia</h1>
     <p>Café oversikt — logg inn for å fortsette</p>
     <form id="login-form" onsubmit="doLogin();return false;" autocomplete="on">
+      <input type="text" name="username" autocomplete="username" value="kafeoversikt" style="display:none" aria-hidden="true">
       <div class="form-row" style="margin-bottom:10px">
         <label for="login-role">Rolle</label>
-        <select id="login-role" name="username" autocomplete="username"
+        <select id="login-role"
           style="width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-size:14px;font-family:inherit">
           <option value="admin">Admin</option>
           <option value="staff">Ansatt</option>
@@ -4891,52 +4892,61 @@ async function buildInnsikt() {
     prodLog.forEach(r => { if(r.cafe_product_id) prodByProd[r.cafe_product_id]  = (prodByProd[r.cafe_product_id]||0)  + Number(r.quantity_produced); });
     sales.forEach(r   => { if(r.cafe_product_id) salesByProd[r.cafe_product_id] = (salesByProd[r.cafe_product_id]||0) + r.units_sold; });
     // For auto_canteen_produce products: also derive production from delivered kantine orders
-    // that have NOT already been imported via the manual sync (to avoid double-counting).
-    // This lets products like sjokolade cookies show production without requiring a manual sync.
     try {
-      const autoCanteenIds = new Set(ST.cafeProducts.filter(p => p.auto_canteen_produce).map(p => p.id));
+      const autoCanteenProds = ST.cafeProducts.filter(p => p.auto_canteen_produce);
+      const autoCanteenIds = new Set(autoCanteenProds.map(p => p.id));
+
       if (autoCanteenIds.size > 0) {
-        // Build map: kantine product id → ingredient_id
-        // Primary: via canteen_product_id field set during sync
-        // Fallback: name matching (for ingredients never synced)
+        // Build map: kantine product id → ingredient_id (canteen_product_id first, then name fallback)
         const kantineIngMap = {};
         (ST.ingredients || []).forEach(i => { if (i.canteen_product_id) kantineIngMap[i.canteen_product_id] = i.id; });
         (ST.kantineProducts || []).forEach(kp => {
-          if (kantineIngMap[kp.id] != null) return; // already mapped via canteen_product_id
+          if (kantineIngMap[kp.id] != null) return;
           const match = (ST.ingredients || []).find(i => i.name.toLowerCase() === kp.name.toLowerCase());
           if (match) kantineIngMap[kp.id] = match.id;
         });
+
+        // Find kantine product named "sjokolade cookies" specifically
+        const cookieKp = (ST.kantineProducts||[]).find(kp => kp.name.toLowerCase().includes('sjokolade'));
 
         // Build map: ingredient_id → cafe_product_id (auto_canteen_produce only)
         const ingToCp = {};
         recipeRows.forEach(r => { if (autoCanteenIds.has(r.cafe_product_id) && r.ingredients?.id) ingToCp[r.ingredients.id] = r.cafe_product_id; });
 
+        // Check recipe rows for auto_canteen products
+        const autoRecipes = recipeRows.filter(r => autoCanteenIds.has(r.cafe_product_id));
+
         if (Object.keys(ingToCp).length > 0) {
-          // IDs of orders already synced (have a purchase_receipt) — skip to avoid double-counting
-          const syncedOrderIds = new Set(receipts.filter(r => r.bestillinger_order_id).map(r => r.bestillinger_order_id));
+          // Products that already have production_log data in this period — don't double-count from kantine orders
+          const hasProductionLog = new Set(Object.keys(prodByProd).map(Number));
+          const kantineOrders = await sbGet(`orders?status=in.(delivered,accepted)&select=id,items,week`).catch(() => []);
 
-          let oQ = `orders?status=in.(delivered,accepted)&select=id,items,created_at`;
-          if (dateFrom) oQ += `&created_at=gte.${dateFrom}`;
-          if (dateTo)   oQ += `&created_at=lte.${dateTo}T23:59:59`;
-          const kantineOrders = await sbGet(oQ).catch(() => []);
-
+          let inRangeCount = 0;
           kantineOrders.forEach(order => {
-            if (syncedOrderIds.has(order.id)) return; // already in production_log via sync
+            if (order.week && (dateFrom || dateTo)) {
+              const [wy, wn] = order.week.split('-W').map(Number);
+              const approxDate = new Date(wy, 0, 1 + (wn - 1) * 7);
+              const approxStr = approxDate.toISOString().slice(0, 10);
+              if (dateFrom && approxStr < dateFrom) return;
+              if (dateTo   && approxStr > dateTo)   return;
+            }
+            inRangeCount++;
             (Array.isArray(order.items) ? order.items : []).forEach(item => {
               const ingId = kantineIngMap[item.pid];
               if (!ingId) return;
               const cpId = ingToCp[ingId];
               if (!cpId) return;
-              // effective qty: sum splits if present, otherwise item.qty
+              if (hasProductionLog.has(cpId)) return; // already covered by production_log, skip to avoid double-count
               const qty = (item.splits && item.splits.length > 0)
                 ? item.splits.reduce((s, sp) => s + (sp.qty || 0), 0)
                 : (item.qty || 0);
               if (qty > 0) prodByProd[cpId] = (prodByProd[cpId] || 0) + qty;
             });
           });
+        } else {
         }
       }
-    } catch(e) { /* kantine-order production is best-effort */ }
+    } catch(e) { /* best-effort */ }
 
     const wasteArr = Object.entries(wasteByProd).map(([key, w]) => {
       const total     = w.kassert + w.g2g + w.personalmat;
@@ -5408,16 +5418,51 @@ async function buildLager() {
 
   const cpIds = lagerProds.map(p => p.id);
   const idList = cpIds.join(',');
+  const canteenProdIds = new Set(lagerProds.filter(p => p.auto_canteen_produce).map(p => p.id));
 
-  let prodLogs = [], salesData = [], wasteData = [], adjustments = [];
+  let prodLogs = [], salesData = [], wasteData = [], adjustments = [], recipeRows = [];
   try {
-    [prodLogs, salesData, wasteData, adjustments] = await Promise.all([
+    [prodLogs, salesData, wasteData, adjustments, recipeRows] = await Promise.all([
       sbGet(`production_log?cafe_product_id=in.(${idList})&select=cafe_product_id,quantity_produced`),
       sbGet(`daily_sales?cafe_product_id=in.(${idList})&select=cafe_product_id,units_sold`),
       sbGet(`waste_log?cafe_product_id=in.(${idList})&select=cafe_product_id,quantity`),
-      sbGet(`stock_adjustments?cafe_product_id=in.(${idList})&select=*&order=adjustment_date.desc`)
+      sbGet(`stock_adjustments?cafe_product_id=in.(${idList})&select=*&order=adjustment_date.desc`),
+      sbGet(`recipe_items?select=cafe_product_id,ingredients(id)`)
     ]);
   } catch(e) { console.warn('Lager fetch error:', e); }
+
+  // For auto_canteen_produce products: derive received quantities from kantine orders
+  // Stock = Mottatt fra kantine − Solgt − Svinn + Justeringer
+  const receivedMap = {};
+  if (canteenProdIds.size > 0) {
+    try {
+      const kantineIngMap = {};
+      (ST.ingredients || []).forEach(i => { if (i.canteen_product_id) kantineIngMap[i.canteen_product_id] = i.id; });
+      (ST.kantineProducts || []).forEach(kp => {
+        if (kantineIngMap[kp.id] != null) return;
+        const match = (ST.ingredients || []).find(i => i.name.toLowerCase() === kp.name.toLowerCase());
+        if (match) kantineIngMap[kp.id] = match.id;
+      });
+      const ingToCp = {};
+      recipeRows.forEach(r => { if (canteenProdIds.has(r.cafe_product_id) && r.ingredients?.id) ingToCp[r.ingredients.id] = r.cafe_product_id; });
+
+      if (Object.keys(ingToCp).length > 0) {
+        const kantineOrders = await sbGet('orders?status=in.(delivered,accepted)&select=id,items').catch(() => []);
+        kantineOrders.forEach(order => {
+          (Array.isArray(order.items) ? order.items : []).forEach(item => {
+            const ingId = kantineIngMap[item.pid];
+            if (!ingId) return;
+            const cpId = ingToCp[ingId];
+            if (!cpId) return;
+            const qty = (item.splits && item.splits.length > 0)
+              ? item.splits.reduce((s, sp) => s + (sp.qty || 0), 0)
+              : (item.qty || 0);
+            if (qty > 0) receivedMap[cpId] = (receivedMap[cpId] || 0) + qty;
+          });
+        });
+      }
+    } catch(e) { console.warn('Lager kantine fetch error:', e); }
+  }
 
   // Build totals maps
   const prodMap = {}, salesMap = {}, wasteMap = {}, adjMap = {};
@@ -5426,26 +5471,32 @@ async function buildLager() {
   wasteData.forEach(r => { wasteMap[r.cafe_product_id] = (wasteMap[r.cafe_product_id] || 0) + Number(r.quantity          || 0); });
   adjustments.forEach(r => { adjMap[r.cafe_product_id] = (adjMap[r.cafe_product_id]   || 0) + Number(r.quantity          || 0); });
 
+  // "inn" = received from canteen (canteen products) or produced in-house (other products)
+  const innMap = {};
+  lagerProds.forEach(p => {
+    innMap[p.id] = canteenProdIds.has(p.id) ? (receivedMap[p.id] || 0) : (prodMap[p.id] || 0);
+  });
+
   // Calculate stock and alert counts
   let alertCount = 0;
   const stockByProd = {};
   lagerProds.forEach(p => {
-    const produced = prodMap[p.id] || 0;
-    const sold     = salesMap[p.id] || 0;
-    const wasted   = wasteMap[p.id] || 0;
-    const adj      = adjMap[p.id]   || 0;
-    const stock    = produced - sold - wasted + adj;
+    const inn    = innMap[p.id];
+    const sold   = salesMap[p.id] || 0;
+    const wasted = wasteMap[p.id] || 0;
+    const adj    = adjMap[p.id]   || 0;
+    const stock  = inn - sold - wasted + adj;
     stockByProd[p.id] = stock;
-    const minStock = p.min_stock != null ? Number(p.min_stock) : null;
-    if (minStock != null && stock < minStock) alertCount++;
+    if (p.min_stock != null && stock < Number(p.min_stock)) alertCount++;
   });
 
   const rows = lagerProds.map(p => {
-    const produced = prodMap[p.id]  || 0;
-    const sold     = salesMap[p.id] || 0;
-    const wasted   = wasteMap[p.id] || 0;
-    const adj      = adjMap[p.id]   || 0;
-    const stock    = stockByProd[p.id];
+    const isCanteen = canteenProdIds.has(p.id);
+    const inn    = innMap[p.id];
+    const sold   = salesMap[p.id] || 0;
+    const wasted = wasteMap[p.id] || 0;
+    const adj    = adjMap[p.id]   || 0;
+    const stock  = stockByProd[p.id];
     const minStock = p.min_stock != null ? Number(p.min_stock) : null;
 
     let statusHtml = '<span style="color:#aaa;font-size:0.85rem">—</span>';
@@ -5465,12 +5516,12 @@ async function buildLager() {
     const stockDisplay = stock <= 0
       ? `<strong style="color:#e53935;font-size:1.1rem">${stock}</strong>`
       : `<strong style="font-size:1.1rem">${stock}</strong>`;
-
     const adjDisplay = adj !== 0 ? `<span style="color:#888;font-size:0.8rem">(${adj > 0 ? '+' : ''}${adj} just.)</span>` : '';
+    const icon = isCanteen ? '🚚' : '🏭';
 
     return `<tr style="border-bottom:1px solid var(--bg3);${rowBg}">
-      <td style="padding:10px 8px;font-weight:500">🏢 ${esc(p.name)}</td>
-      <td style="padding:10px 8px;text-align:center;color:#555">${produced}</td>
+      <td style="padding:10px 8px;font-weight:500">${icon} ${esc(p.name)}</td>
+      <td style="padding:10px 8px;text-align:center;color:#555">${inn}</td>
       <td style="padding:10px 8px;text-align:center;color:#555">${sold}</td>
       <td style="padding:10px 8px;text-align:center;color:#555">${wasted}</td>
       <td style="padding:10px 8px;text-align:center">${stockDisplay} ${adjDisplay}</td>
@@ -5518,6 +5569,8 @@ async function buildLager() {
       ⚠️ <strong>${alertCount} produkt${alertCount > 1 ? 'er' : ''}</strong> er under minimumsbeholdning — sjekk tabellen under.
     </div>` : '';
 
+  const innColLabel = canteenProdIds.size > 0 ? 'Mottatt' : 'Produsert';
+
   return `
     <div style="padding:16px;max-width:960px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
@@ -5530,7 +5583,7 @@ async function buildLager() {
           <thead>
             <tr style="background:var(--bg2);color:#666;font-size:0.78rem;text-transform:uppercase">
               <th style="padding:8px;text-align:left">Produkt</th>
-              <th style="padding:8px;text-align:center">Produsert</th>
+              <th style="padding:8px;text-align:center">${innColLabel}</th>
               <th style="padding:8px;text-align:center">Solgt</th>
               <th style="padding:8px;text-align:center">Svinn</th>
               <th style="padding:8px;text-align:center">På lager</th>
@@ -5544,54 +5597,12 @@ async function buildLager() {
       </div>
       ${adjLogHtml}
       <p style="margin-top:20px;font-size:0.82rem;color:#aaa">
-        💡 Bruk "Tell opp" for å korrigere beholdningen ved fysisk opptelling.
+        💡 🚚 = mottatt fra kantine · 🏭 = produsert internt · Bruk "Tell opp" for å korrigere ved fysisk opptelling.
         Min. lager settes i produktinnstillingene (Oppskrifter → Salgsprodukter → rediger produkt).
       </p>
     </div>
     ${buildStockCountModal()}`;
 }
-
-function buildStockCountModal() {
-  if (!ST._stockCountModal) return '';
-  const { productId, currentStock } = ST._stockCountModal;
-  const prod = ST.cafeProducts.find(p => p.id === productId);
-  return `
-    <div class="modal-overlay" onclick="closeStockCount()">
-      <div class="modal" onclick="event.stopPropagation()" style="max-width:380px">
-        <h3 style="margin:0 0 16px">Tell opp lager</h3>
-        <p style="color:#555;margin:0 0 6px;font-size:0.9rem"><strong>${esc(prod?.name || '')}</strong></p>
-        <p style="color:#777;margin:0 0 16px;font-size:0.88rem">
-          Beregnet beholdning: <strong>${currentStock}</strong> stk<br>
-          Skriv inn faktisk antall du kan telle nå:
-        </p>
-        <div class="form-row">
-          <label>Faktisk antall på lager</label>
-          <input type="number" id="sc-actual" min="0" step="1" style="width:100%"
-            placeholder="0">
-        </div>
-        <div class="form-row">
-          <label>Notat (valgfritt)</label>
-          <input type="text" id="sc-note" style="width:100%"
-            placeholder="f.eks. manuell opptelling">
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-primary" onclick="saveStockCount(${productId}, ${currentStock})">Lagre</button>
-          <button class="btn" onclick="closeStockCount()">Avbryt</button>
-        </div>
-      </div>
-    </div>`;
-}
-
-function openStockCount(productId, currentStock) {
-  ST._stockCountModal = { productId, currentStock };
-  renderTab();
-}
-
-function closeStockCount() {
-  ST._stockCountModal = null;
-  renderTab();
-}
-
 async function saveStockCount(productId, currentStock) {
   const actualStr = el('sc-actual')?.value?.trim();
   const actual    = parseFloat(actualStr);
