@@ -5769,25 +5769,90 @@ async function saveStockCount(productId, currentStock) {
 
 async function refreshLagerStatus() {
   try {
-    const lagerProds = ST.cafeProducts.filter(p => p.min_stock != null);
-    if (lagerProds.length === 0) { ST._lagerLow = 0; renderNav(); return; }
-    const idList = lagerProds.map(p => p.id).join(',');
-    const [prodLogs, salesData, wasteData, adjustments] = await Promise.all([
-      sbGet(`production_log?cafe_product_id=in.(${idList})&select=cafe_product_id,quantity_produced`),
-      sbGet(`daily_sales?cafe_product_id=in.(${idList})&select=cafe_product_id,units_sold`),
-      sbGet(`waste_log?cafe_product_id=in.(${idList})&select=cafe_product_id,quantity`),
-      sbGet(`stock_adjustments?cafe_product_id=in.(${idList})&select=cafe_product_id,quantity`)
-    ]);
-    const prodMap = {}, salesMap = {}, wasteMap = {}, adjMap = {};
-    prodLogs.forEach(r   => { prodMap[r.cafe_product_id]  = (prodMap[r.cafe_product_id]  || 0) + Number(r.quantity_produced || 0); });
-    salesData.forEach(r  => { salesMap[r.cafe_product_id] = (salesMap[r.cafe_product_id] || 0) + Number(r.units_sold        || 0); });
-    wasteData.forEach(r  => { wasteMap[r.cafe_product_id] = (wasteMap[r.cafe_product_id] || 0) + Number(r.quantity          || 0); });
-    adjustments.forEach(r => { adjMap[r.cafe_product_id]  = (adjMap[r.cafe_product_id]   || 0) + Number(r.quantity          || 0); });
     let low = 0;
-    lagerProds.forEach(p => {
-      const stock = (prodMap[p.id]||0) - (salesMap[p.id]||0) - (wasteMap[p.id]||0) + (adjMap[p.id]||0);
-      if (stock < Number(p.min_stock)) low++;
-    });
+
+    // ── Cafe products ──
+    const lagerProds = ST.cafeProducts.filter(p => p.min_stock != null);
+    if (lagerProds.length > 0) {
+      const idList         = lagerProds.map(p => p.id).join(',');
+      const canteenProdIds = new Set(lagerProds.filter(p => p.auto_canteen_produce).map(p => p.id));
+
+      const [prodLogs, salesData, wasteData, adjustments, recipeRows] = await Promise.all([
+        sbGet(`production_log?cafe_product_id=in.(${idList})&select=cafe_product_id,quantity_produced`),
+        sbGet(`daily_sales?cafe_product_id=in.(${idList})&select=cafe_product_id,units_sold`),
+        sbGet(`waste_log?cafe_product_id=in.(${idList})&select=cafe_product_id,quantity`),
+        sbGet(`stock_adjustments?cafe_product_id=in.(${idList})&select=cafe_product_id,quantity`),
+        canteenProdIds.size > 0 ? sbGet('recipe_items?select=cafe_product_id,ingredient_id') : Promise.resolve([])
+      ]);
+
+      const prodMap = {}, salesMap = {}, wasteMap = {}, adjMap = {};
+      prodLogs.forEach(r    => { prodMap[r.cafe_product_id]  = (prodMap[r.cafe_product_id]  || 0) + Number(r.quantity_produced || 0); });
+      salesData.forEach(r   => { salesMap[r.cafe_product_id] = (salesMap[r.cafe_product_id] || 0) + Number(r.units_sold        || 0); });
+      wasteData.forEach(r   => { wasteMap[r.cafe_product_id] = (wasteMap[r.cafe_product_id] || 0) + Number(r.quantity          || 0); });
+      adjustments.forEach(r => { adjMap[r.cafe_product_id]   = (adjMap[r.cafe_product_id]   || 0) + Number(r.quantity          || 0); });
+
+      // Kantine received map for auto_canteen_produce products
+      const receivedMap = {};
+      if (canteenProdIds.size > 0) {
+        const kantineIngMap = {};
+        (ST.ingredients || []).forEach(i => { if (i.canteen_product_id) kantineIngMap[i.canteen_product_id] = i.id; });
+        (ST.kantineProducts || []).forEach(kp => {
+          if (kantineIngMap[kp.id] != null) return;
+          const match = (ST.ingredients || []).find(i => i.name.toLowerCase() === kp.name.toLowerCase());
+          if (match) kantineIngMap[kp.id] = match.id;
+        });
+        const ingToCp = {};
+        recipeRows.forEach(r => { if (canteenProdIds.has(r.cafe_product_id) && r.ingredient_id) ingToCp[r.ingredient_id] = r.cafe_product_id; });
+        if (Object.keys(ingToCp).length > 0) {
+          const kantineOrders = await sbGet('orders?status=in.(delivered,accepted)&select=items').catch(() => []);
+          kantineOrders.forEach(order => {
+            (Array.isArray(order.items) ? order.items : []).forEach(item => {
+              const ingId = kantineIngMap[item.pid];
+              if (!ingId) return;
+              const cpId = ingToCp[ingId];
+              if (!cpId) return;
+              const qty = (item.splits && item.splits.length > 0)
+                ? item.splits.reduce((s, sp) => s + (sp.qty || 0), 0) : (item.qty || 0);
+              if (qty > 0) receivedMap[cpId] = (receivedMap[cpId] || 0) + qty;
+            });
+          });
+        }
+      }
+
+      lagerProds.forEach(p => {
+        const inn   = canteenProdIds.has(p.id) ? (receivedMap[p.id] || 0) : (prodMap[p.id] || 0);
+        const stock = inn - (salesMap[p.id]||0) - (wasteMap[p.id]||0) + (adjMap[p.id]||0);
+        if (stock < Number(p.min_stock)) low++;
+      });
+    }
+
+    // ── Ingredients ──
+    const lagerIngs = ST.ingredients.filter(i => i.min_stock != null && i.canteen_product_id != null);
+    if (lagerIngs.length > 0) {
+      const ingIdList = lagerIngs.map(i => i.id).join(',');
+      const [purchaseItems, ingRecipeItems] = await Promise.all([
+        sbGet(`purchase_items?ingredient_id=in.(${ingIdList})&select=ingredient_id,quantity`),
+        sbGet(`recipe_items?ingredient_id=in.(${ingIdList})&select=cafe_product_id,ingredient_id,quantity`)
+      ]);
+      const receivedIngMap = {};
+      purchaseItems.forEach(r => { receivedIngMap[r.ingredient_id] = (receivedIngMap[r.ingredient_id] || 0) + Number(r.quantity || 0); });
+      const usedIngMap = {};
+      if (ingRecipeItems.length > 0) {
+        const relatedCpIds = [...new Set(ingRecipeItems.map(r => r.cafe_product_id))];
+        const prodLogs2 = await sbGet(`production_log?cafe_product_id=in.(${relatedCpIds.join(',')})&select=cafe_product_id,quantity_produced`).catch(() => []);
+        const prodMap2 = {};
+        prodLogs2.forEach(r => { prodMap2[r.cafe_product_id] = (prodMap2[r.cafe_product_id] || 0) + Number(r.quantity_produced || 0); });
+        ingRecipeItems.forEach(r => {
+          const used = (prodMap2[r.cafe_product_id] || 0) * Number(r.quantity || 0);
+          usedIngMap[r.ingredient_id] = (usedIngMap[r.ingredient_id] || 0) + used;
+        });
+      }
+      lagerIngs.forEach(i => {
+        const stock = (receivedIngMap[i.id] || 0) - (usedIngMap[i.id] || 0);
+        if (stock < Number(i.min_stock)) low++;
+      });
+    }
+
     ST._lagerLow = low;
     renderNav();
   } catch(e) { ST._lagerLow = 0; }
