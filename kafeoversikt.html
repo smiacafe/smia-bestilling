@@ -1472,7 +1472,7 @@ async function savePurchase(supplierType) {
 async function buildKantineSync() {
   let deliveredOrders = [];
   try {
-    deliveredOrders = await sbGet('orders?status=eq.delivered&order=created_at.desc&limit=30');
+    deliveredOrders = await sbGet('orders?status=in.(delivered,accepted)&order=created_at.desc&limit=30');
   } catch(e) {}
 
   // Find which are already synced — store receiptId per orderId for undo
@@ -4915,7 +4915,7 @@ async function buildInnsikt() {
           // IDs of orders already synced (have a purchase_receipt) — skip to avoid double-counting
           const syncedOrderIds = new Set(receipts.filter(r => r.bestillinger_order_id).map(r => r.bestillinger_order_id));
 
-          let oQ = `orders?status=eq.delivered&select=id,items,created_at`;
+          let oQ = `orders?status=in.(delivered,accepted)&select=id,items,created_at`;
           if (dateFrom) oQ += `&created_at=gte.${dateFrom}`;
           if (dateTo)   oQ += `&created_at=lte.${dateTo}T23:59:59`;
           const kantineOrders = await sbGet(oQ).catch(() => []);
