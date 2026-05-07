@@ -5603,6 +5603,39 @@ async function buildLager() {
     </div>
     ${buildStockCountModal()}`;
 }
+function openStockCount(productId, currentStock) {
+  ST._stockCountModal = { productId, currentStock };
+  renderTab();
+}
+
+function buildStockCountModal() {
+  if (!ST._stockCountModal) return '';
+  const { productId, currentStock } = ST._stockCountModal;
+  const prod = ST.cafeProducts.find(p => p.id === productId);
+  return `
+  <div class="modal-bg" onclick="if(event.target===this){ST._stockCountModal=null;renderTab()}">
+    <div class="modal">
+      <h3>📦 Lagertelling — ${esc(prod?.name || '')}</h3>
+      <p style="font-size:0.88rem;color:var(--text2);margin-bottom:1rem">
+        Beregnet beholdning: <strong>${currentStock}</strong>.
+        Tast inn faktisk antall etter opptelling.
+      </p>
+      <div class="form-row">
+        <label for="sc-actual">Faktisk antall på lager</label>
+        <input type="number" id="sc-actual" min="0" step="1" placeholder="0" style="width:140px" autofocus>
+      </div>
+      <div class="form-row">
+        <label for="sc-note">Notat (valgfritt)</label>
+        <input type="text" id="sc-note" placeholder="f.eks. Opptelling etter helg">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveStockCount(${productId}, ${currentStock})">💾 Lagre justering</button>
+        <button class="btn" onclick="ST._stockCountModal=null;renderTab()">Avbryt</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 async function saveStockCount(productId, currentStock) {
   const actualStr = el('sc-actual')?.value?.trim();
   const actual    = parseFloat(actualStr);
