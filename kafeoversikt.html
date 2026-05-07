@@ -646,11 +646,11 @@ function stepWaste(key, delta) {
 function stepper(key, color, borderCol, bgCol, step = 1) {
   const val = ST._wasteState[key] || '0';
   return `<div style="display:flex;align-items:center;gap:2px;justify-content:center">
-    <button onmousedown="stepWaste('${key}',-step)" style="width:26px;height:26px;border:1px solid ${borderCol};background:${bgCol};border-radius:5px;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0">−</button>
+    <button onmousedown="stepWaste('${key}',-${step})" style="width:26px;height:26px;border:1px solid ${borderCol};background:${bgCol};border-radius:5px;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0">−</button>
     <input type="number" min="0" step="${step}" value="${esc(String(val))}"
       id="wi-${key}" style="text-align:center;border-color:${borderCol};width:${step<1?46:38}px;padding:3px 2px;font-size:0.9rem"
       onchange="updateWasteState('${key}',this.value);updateAvstemming()">
-    <button onmousedown="stepWaste('${key}',step)" style="width:26px;height:26px;border:1px solid ${borderCol};background:${bgCol};border-radius:5px;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0">+</button>
+    <button onmousedown="stepWaste('${key}',${step})" style="width:26px;height:26px;border:1px solid ${borderCol};background:${bgCol};border-radius:5px;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0">+</button>
   </div>`;
 }
 
