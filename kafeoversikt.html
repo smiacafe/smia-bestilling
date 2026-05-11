@@ -563,8 +563,55 @@ function getTabs(role) {
   ];
 }
 
+function updatePageTitle() {
+  const n = (ST._bordBadge || 0) + (ST._pendingRequests || 0);
+  document.title = n > 0 ? `(${n}) SMIA Kafé` : 'SMIA Kafé — Kafeoversikt';
+}
+
+function updateFavicon() {
+  const n = (ST._bordBadge || 0) + (ST._pendingRequests || 0);
+  const size = 32;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  // Coffee-brown rounded background
+  ctx.fillStyle = '#6F4E37';
+  if (ctx.roundRect) {
+    ctx.beginPath(); ctx.roundRect(1, 1, size-2, size-2, 7); ctx.fill();
+  } else {
+    ctx.fillRect(1, 1, size-2, size-2);
+  }
+  // Coffee cup emoji
+  ctx.font = '20px serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('☕', size/2, size/2 + 1);
+  // Red badge if there are alerts
+  if (n > 0) {
+    ctx.fillStyle = '#e53935';
+    ctx.beginPath();
+    ctx.arc(size - 7, 7, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(n > 9 ? '9+' : String(n), size - 7, 7);
+  }
+  let link = document.getElementById('dynamic-favicon');
+  if (!link) {
+    link = document.createElement('link');
+    link.id = 'dynamic-favicon';
+    link.rel = 'icon';
+    document.head.appendChild(link);
+  }
+  link.href = canvas.toDataURL('image/png');
+}
+
 function renderNav() {
   const tabs = getTabs(ST.role);
+  updatePageTitle();
+  updateFavicon();
   el('main-nav').innerHTML = tabs.map(t => {
     let label = t.label;
     if (t.id === 'innkjop' && ST._kantineUnsynced > 0) {
@@ -3618,10 +3665,13 @@ async function buildBord() {
 
   return `
   <div style="max-width:700px">
-    ${ST.role === 'admin' && pending.length > 0 ? `
-    <div class="card" style="margin-bottom:1rem">
-      <div class="card-header"><span class="card-title">⏳ Venter på bekreftelse (${pending.length})</span></div>
-      ${pending.map(r => bookingCard(r, 'confirm')).join('')}
+    ${pending.length > 0 ? `
+    <div class="card" style="margin-bottom:1rem${ST.role !== 'admin' ? ';border-left:4px solid #f57f17' : ''}">
+      <div class="card-header">
+        <span class="card-title">⏳ Venter på bekreftelse (${pending.length})</span>
+        ${ST.role !== 'admin' ? '<span style="font-size:0.78rem;color:#f57f17;font-weight:600">Venter på admin-bekreftelse</span>' : ''}
+      </div>
+      ${pending.map(r => bookingCard(r, ST.role === 'admin' ? 'confirm' : '')).join('')}
     </div>` : ''}
 
     <div class="card" style="margin-bottom:1rem">
