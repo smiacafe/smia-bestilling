@@ -423,10 +423,10 @@ async function doLogin() {
   const h = await sha256hex(pw);
   const err = document.getElementById('login-error');
   if (h === HASH_ADMIN) {
-    sessionStorage.setItem('smia_role', 'admin');
+    localStorage.setItem('smia_role', 'admin');
     startApp('admin');
   } else if (h === HASH_STAFF) {
-    sessionStorage.setItem('smia_role', 'staff');
+    localStorage.setItem('smia_role', 'staff');
     startApp('staff');
   } else {
     err.style.display = '';
@@ -436,7 +436,7 @@ async function doLogin() {
 }
 
 function doLogout() {
-  sessionStorage.removeItem('smia_role');
+  localStorage.removeItem('smia_role');
   location.reload();
 }
 
@@ -668,7 +668,7 @@ async function renderTab() {
       default:         c.innerHTML = '<div class="empty">Ukjent fane</div>';
     }
     bindTabEvents();
-    if (ST.tab === 'innsikt') initCharts();
+    if (ST.tab === 'innsikt' || (ST.tab === 'innkjop' && ST.subTab.innkjop === 'prishistorikk')) initCharts();
   } catch(e) {
     c.innerHTML = `<div class="alert alert-error">Feil: ${esc(e.message)}</div>`;
     console.error(e);
@@ -1064,7 +1064,7 @@ async function buildInnkjop() {
   const subTab = ST.subTab.innkjop || 'supermarked';
   const tabs = ST.role === 'admin'
     ? ['supermarked','kantine','ekstern','historikk','prishistorikk']
-    : ['supermarked','historikk'];
+    : ['supermarked','historikk','prishistorikk'];
   const kantineBadge = ST._kantineUnsynced > 0 ? ` <span style="background:#e6a817;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle">${ST._kantineUnsynced}</span>` : '';
   const tabLabels = { supermarked: '🛒 Supermarked', kantine: `🏢 Kantine${kantineBadge}`, ekstern: '🏪 Ekstern', historikk: '📋 Historikk', prishistorikk: '📈 Prishistorikk' };
 
@@ -1858,7 +1858,7 @@ async function buildPrishistorikk() {
                     : diff < -0.001 ? `<span style="color:#3B6D11;font-weight:700">↓ ${fmtN(Math.abs(pct))}%</span>`
                     : `<span style="color:var(--text2)">→ stabil</span>`;
     const isSel     = name === selected;
-    return `<tr style="cursor:pointer;background:${isSel?'var(--bg2)':''}" onclick="ST._priceHistItem='${name.replace(/'/g,"\\'")}';renderTab()">
+    return `<tr style="cursor:pointer;background:${isSel?'var(--bg2)':''}" onclick="ST._priceHistItem='${name.replace(/'/g,"\\'")}';renderTab().then(()=>document.getElementById('pricehistory-detail')?.scrollIntoView({behavior:'smooth',block:'start'}))">
       <td style="font-weight:${isSel?'700':'400'}">${esc(displayName[name])}</td>
       <td style="text-align:right">${fmt(last)}</td>
       <td style="text-align:right">${trend}</td>
@@ -1885,7 +1885,7 @@ async function buildPrishistorikk() {
     };
 
     detailHtml = `
-    <div class="card" style="margin-top:14px">
+    <div class="card" id="pricehistory-detail" style="margin-top:14px">
       <div class="card-header">
         <span class="card-title">${esc(displayName[selected] || selected)}</span>
         <div class="spacer"></div>
@@ -5946,7 +5946,7 @@ function bindTabEvents() {
 //  BOOTSTRAP
 // =============================================================
 window.addEventListener('DOMContentLoaded', async () => {
-  const savedRole = sessionStorage.getItem('smia_role');
+  const savedRole = localStorage.getItem('smia_role');
   if (savedRole === 'admin' || savedRole === 'staff') {
     startApp(savedRole);
   }
