@@ -363,9 +363,7 @@
       <div class="grid2">
         <div class="form-group">
           <label>Ønsket dato <span class="req">*</span></label>
-          <input type="text" id="delivery-date" placeholder="dd/mm/åååå"
-            maxlength="10" inputmode="numeric" autocomplete="off" style="width:100%"
-            oninput="autoFormatDate(this)">
+          <input type="date" id="delivery-date" style="width:100%">
         </div>
         <div class="form-group">
           <label id="time-label">Ønsket tidspunkt <span class="req">*</span></label>
@@ -661,8 +659,7 @@
     const note           = document.getElementById('note').value.trim();
     const deliveryType     = document.querySelector('input[name="delivery"]:checked')?.value || '';
     const deliveryLocation = document.getElementById('delivery-location')?.value.trim() || '';
-    const deliveryDateRaw  = document.getElementById('delivery-date').value.trim();
-    const deliveryDate     = parseDmyToIso(deliveryDateRaw);
+    const deliveryDate     = document.getElementById('delivery-date').value.trim() || null;
     const deliveryTime     = document.getElementById('delivery-time').value;
 
     if (!invoiceTo)                                    { showError('Vennligst fyll inn hvem fakturaen skal sendes til.'); return; }
@@ -673,7 +670,7 @@
     const isTable = deliveryType === 'bord';
     if (!deliveryType)                                        { showError('Vennligst velg leveringsmåte.'); return; }
     if (deliveryType === 'serveres' && !deliveryLocation)     { showError('Vennligst oppgi rom / sted for levering.'); return; }
-    if (!deliveryDate)                                        { showError('Vennligst oppgi en gyldig dato (dd/mm/åååå).'); return; }
+    if (!deliveryDate)                                        { showError('Vennligst velg ønsket dato.'); return; }
     if (!deliveryTime)                                        { showError('Vennligst oppgi ønsket tidspunkt.'); return; }
 
     // Collect selected products (not needed for table bookings)
@@ -728,6 +725,9 @@
       btn.textContent = 'Send forespørsel';
     }
   }
+
+  // Set minimum date to today so past dates can't be selected
+  document.getElementById('delivery-date').min = new Date().toISOString().split('T')[0];
 
   // Load products on page ready
   loadProducts();
