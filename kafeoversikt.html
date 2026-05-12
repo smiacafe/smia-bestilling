@@ -4677,21 +4677,36 @@ async function buildInnsikt() {
     sbGet(`waste_log?select=*${dateFilter('log_date')}`).catch(()=>[]),
     sbGet(`private_orders?select=*,private_order_items(*)${dateFilter('order_date')}`).catch(()=>[]),
     sbGet(`production_log?select=*${dateFilter('log_date')}`).catch(()=>[]),
-    sbGet(`recipe_items?select=cafe_product_id,quantity,ingredients(id,cost_per_unit,name)`).catch(()=>[])
+    sbGet(`recipe_items?select=cafe_product_id,component_product_id,quantity,ingredients(id,cost_per_unit,name)`).catch(()=>[])
   ]);
 
   // Build cost-per-unit map: { cafe_product_id → cost_per_unit (kr) }
-  // cost = Σ (recipe quantity × ingredient cost_per_unit)
+  // First pass: ingredient-based costs
   const costMap = {};
   recipeRows.forEach(r => {
-    const ingCost = Number(r.ingredients?.cost_per_unit || 0);
-    const qty     = Number(r.quantity || 0);
-    costMap[r.cafe_product_id] = (costMap[r.cafe_product_id] || 0) + qty * ingCost;
+    if (r.ingredient_id || r.ingredients) {
+      const ingCost = Number(r.ingredients?.cost_per_unit || 0);
+      const qty     = Number(r.quantity || 0);
+      costMap[r.cafe_product_id] = (costMap[r.cafe_product_id] || 0) + qty * ingCost;
+    }
   });
-  // Which products have at least one ingredient with a cost entered
-  const hasAnyCostSet = id => recipeRows.some(r =>
-    r.cafe_product_id === id && Number(r.ingredients?.cost_per_unit || 0) > 0
-  );
+  // Second pass: resolve bundle/component product costs (e.g. "Vaffel & Kaffe")
+  const compRows = recipeRows.filter(r => r.component_product_id);
+  const resolveBundle = (pid, depth = 0) => {
+    if (depth > 5 || !pid) return 0;
+    if (costMap[pid] !== undefined) return costMap[pid];
+    const comps = compRows.filter(r => r.cafe_product_id === pid);
+    if (comps.length === 0) return 0;
+    costMap[pid] = comps.reduce((s, r) => s + resolveBundle(r.component_product_id, depth + 1), 0);
+    return costMap[pid];
+  };
+  const bundleProductIds = [...new Set(compRows.map(r => r.cafe_product_id))];
+  bundleProductIds.forEach(pid => resolveBundle(pid));
+  // Which products have at least one ingredient with a cost entered (or are a bundle of such products)
+  const hasAnyCostSet = id => {
+    if (recipeRows.some(r => r.cafe_product_id === id && Number(r.ingredients?.cost_per_unit || 0) > 0)) return true;
+    return compRows.filter(r => r.cafe_product_id === id).some(r => hasAnyCostSet(r.component_product_id));
+  };
 
   const cpMap = {};
   ST.cafeProducts.forEach(p => { cpMap[p.id] = p; cpMap[p.name.toLowerCase()] = p; });
