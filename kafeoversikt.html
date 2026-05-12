@@ -3167,6 +3167,11 @@ function buildCpModal() {
       <input type="number" id="cp-minstock" min="0" step="1" value="${p.min_stock != null ? p.min_stock : ''}" placeholder="Tom = ingen varsling">
     </div>
     <div class="form-row" style="align-items:center;gap:10px">
+      <label style="margin:0">🪑 Tilgjengelig for bordbooking</label>
+      <input type="checkbox" id="cp-table" ${p.available_for_table!==false?'checked':''} style="width:18px;height:18px;cursor:pointer">
+      <span style="font-size:0.82rem;color:var(--text2)">(vises i menyliste når ansatte registrerer bordbestilling)</span>
+    </div>
+    <div class="form-row" style="align-items:center;gap:10px">
       <label style="margin:0">🌐 Tilgjengelig for eksternbestilling</label>
       <input type="checkbox" id="cp-external" ${p.available_for_external?'checked':''} style="width:18px;height:18px;cursor:pointer">
       <span style="font-size:0.82rem;color:var(--text2)">(vises i bestillingsskjema for eksterne)</span>
@@ -3225,6 +3230,7 @@ async function saveCafeProduct(id) {
   const price         = parseFloat(el('cp-price')?.value) || 0;
   const made_to_order        = el('cp-mto')?.value === 'true';
   const auto_canteen_produce = el('cp-autokanteen')?.value === 'true';
+  const available_for_table    = el('cp-table')?.checked    !== false;
   const available_for_external = el('cp-external')?.checked || false;
   const no_recipe_needed       = el('cp-norecipe')?.checked  || false;
   const minStockRaw = el('cp-minstock')?.value?.trim();
@@ -3233,11 +3239,11 @@ async function saveCafeProduct(id) {
 
   try {
     if (id) {
-      await sbPatch(`cafe_products?id=eq.${id}`, { name, category: cat, selling_price: price, active: true, made_to_order, auto_canteen_produce, min_stock, available_for_external, no_recipe_needed });
+      await sbPatch(`cafe_products?id=eq.${id}`, { name, category: cat, selling_price: price, active: true, made_to_order, auto_canteen_produce, min_stock, available_for_table, available_for_external, no_recipe_needed });
       const idx = ST.cafeProducts.findIndex(p => p.id === id);
       if (idx >= 0) ST.cafeProducts[idx] = { ...ST.cafeProducts[idx], name, category: cat, selling_price: price, active: true, made_to_order, auto_canteen_produce, min_stock, available_for_external, no_recipe_needed };
     } else {
-      const [np] = await sbPost('cafe_products', [{ name, category: cat, selling_price: price, active: true, made_to_order, auto_canteen_produce, min_stock, available_for_external, no_recipe_needed }]);
+      const [np] = await sbPost('cafe_products', [{ name, category: cat, selling_price: price, active: true, made_to_order, auto_canteen_produce, min_stock, available_for_table, available_for_external, no_recipe_needed }]);
       ST.cafeProducts.push(np);
     }
     ST._cpModal = null;
@@ -3702,7 +3708,7 @@ async function buildBord() {
 }
 
 function buildBordItemPicker(req) {
-  const products = ST.cafeProducts.filter(p => p.active && !p.made_to_order);
+  const products = ST.cafeProducts.filter(p => p.available_for_table !== false);
   const custom   = ST._bordCustomItems || [];
 
   const prodRows = products.map(p => {
@@ -3795,7 +3801,7 @@ async function confirmTableBooking(id, email, name, invoiceTo) {
 
 async function finaliseBordOrder(requestId) {
   const rows = [];
-  const products = ST.cafeProducts.filter(p => p.active && !p.made_to_order);
+  const products = ST.cafeProducts.filter(p => p.available_for_table !== false);
 
   // Standard menu items from stepper
   for (const p of products) {
