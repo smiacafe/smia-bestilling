@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bestillingsforespørsel – SMIA Kafé</title>
+  <script>
+    // ── Web3Forms config ──
+    const WEB3FORMS_KEY = '21660c26-7c4a-4324-9922-377182b8e26f';
+  </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -363,7 +367,7 @@
       <div class="grid2">
         <div class="form-group">
           <label>Ønsket dato <span class="req">*</span></label>
-          <input type="date" id="delivery-date" style="width:100%">
+          <input type="date" id="delivery-date" lang="nb-NO" style="width:100%">
         </div>
         <div class="form-group">
           <label id="time-label">Ønsket tidspunkt <span class="req">*</span></label>
@@ -707,6 +711,42 @@
         order_type:      isTable ? 'table' : 'standard',
         status:          'pending'
       });
+
+      // Send email notification to cafe via Web3Forms
+      try {
+        const orderTypeLabel = isTable ? 'Bordbooking' : deliveryType === 'hentes' ? 'Hentes' : 'Leveres / Serveres';
+        const itemsList = items.length > 0 ? items.map(i => `${i.name}${i.qty > 1 ? ' x ' + i.qty : ''}`).join('\n') : '(Bordbooking - velges ved ankomst)';
+        const dateFormatted = deliveryDate ? deliveryDate.split('-').reverse().join('/') : '-';
+        const body = [
+          `Type:        ${orderTypeLabel}`,
+          `Kunde:       ${invoiceTo}`,
+          `Kontakt:     ${contactName}`,
+          `E-post:      ${email}`,
+          `Antall:      ${numPeople || '-'} pers.`,
+          `Dato:        ${dateFormatted}`,
+          `Tidspunkt:   ${deliveryTime || '-'}`,
+          `Sted:        ${deliveryLocation || '-'}`,
+          ``,
+          `Produkter:`,
+          itemsList,
+          ``,
+          `Allergier:   ${allergies || '-'}`,
+          `Kommentar:   ${note || '-'}`,
+        ].join('\n');
+        await fetch('https://api.web3forms.com/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({
+            access_key: WEB3FORMS_KEY,
+            subject: `Ny bestilling – ${orderTypeLabel} fra ${invoiceTo}`,
+            from_name: 'SMIA Kafé Bestilling',
+            message: body,
+          })
+        });
+      } catch(mailErr) {
+        console.warn('E-postvarsling feilet:', mailErr);
+        // Don't block the success screen — order is already saved
+      }
 
       // Show success screen (different message for table bookings)
       document.getElementById('main-form').style.display = 'none';
