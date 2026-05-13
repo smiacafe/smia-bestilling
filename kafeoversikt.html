@@ -5698,7 +5698,11 @@ async function buildLager() {
       </p>
     </div>
     ${await buildIngLager()}
-    ${buildStockCountModal()}`;
+    ${await buildManualLager()}
+    ${buildStockCountModal()}
+    ${buildIngStockCountModal()}
+    ${buildManualStockCountModal()}
+    ${ST.role === 'admin' ? buildManualStockEditModal() : ''}`;
 }
 async function buildIngLager() {
   const lagerIngs = ST.ingredients.filter(i => i.min_stock != null && i.canteen_product_id != null);
@@ -5707,26 +5711,37 @@ async function buildIngLager() {
   const ingIds    = lagerIngs.map(i => i.id);
   const ingIdList = ingIds.join(',');
 
-  let purchaseItems = [], ingRecipeItems = [];
+  let purchaseItems = [], ingRecipeItems = [], ingAdj = [];
   try {
-    [purchaseItems, ingRecipeItems] = await Promise.all([
+    [purchaseItems, ingRecipeItems, ingAdj] = await Promise.all([
       sbGet(`purchase_items?ingredient_id=in.(${ingIdList})&select=ingredient_id,quantity`),
-      sbGet(`recipe_items?ingredient_id=in.(${ingIdList})&select=cafe_product_id,ingredient_id,quantity`)
+      sbGet(`recipe_items?ingredient_id=in.(${ingIdList})&select=cafe_product_id,ingredient_id,quantity`),
+      sbGet(`ingredient_adjustments?ingredient_id=in.(${ingIdList})&select=ingredient_id,quantity`).catch(() => [])
     ]);
   } catch(e) { console.warn('Ingredient lager fetch error:', e); }
 
+  // Received: apply units_per_purchase to convert purchase units to recipe units
   const receivedIngMap = {};
-  purchaseItems.forEach(r => { receivedIngMap[r.ingredient_id] = (receivedIngMap[r.ingredient_id] || 0) + Number(r.quantity || 0); });
+  purchaseItems.forEach(r => {
+    const ing = lagerIngs.find(i => i.id === r.ingredient_id);
+    const upp = parseFloat(ing?.units_per_purchase || 1);
+    receivedIngMap[r.ingredient_id] = (receivedIngMap[r.ingredient_id] || 0) + Number(r.quantity || 0) * upp;
+  });
 
+  // Adjustments from Tell opp corrections
+  const adjIngMap = {};
+  ingAdj.forEach(r => { adjIngMap[r.ingredient_id] = (adjIngMap[r.ingredient_id] || 0) + Number(r.quantity || 0); });
+
+  // Consumed: sales x recipe quantity (automatic, no staff logging needed)
   const usedIngMap = {};
   if (ingRecipeItems.length > 0) {
     const relatedCpIds = [...new Set(ingRecipeItems.map(r => r.cafe_product_id))];
-    let prodLogs = [];
-    try { prodLogs = await sbGet(`production_log?cafe_product_id=in.(${relatedCpIds.join(',')})&select=cafe_product_id,quantity_produced`); } catch(e) {}
-    const prodMap = {};
-    prodLogs.forEach(r => { prodMap[r.cafe_product_id] = (prodMap[r.cafe_product_id] || 0) + Number(r.quantity_produced || 0); });
+    let salesData = [];
+    try { salesData = await sbGet(`daily_sales?cafe_product_id=in.(${relatedCpIds.join(',')})&select=cafe_product_id,units_sold`); } catch(e) {}
+    const salesMap = {};
+    salesData.forEach(r => { salesMap[r.cafe_product_id] = (salesMap[r.cafe_product_id] || 0) + Number(r.units_sold || 0); });
     ingRecipeItems.forEach(r => {
-      const used = (prodMap[r.cafe_product_id] || 0) * Number(r.quantity || 0);
+      const used = (salesMap[r.cafe_product_id] || 0) * Number(r.quantity || 0);
       usedIngMap[r.ingredient_id] = (usedIngMap[r.ingredient_id] || 0) + used;
     });
   }
@@ -5736,7 +5751,8 @@ async function buildIngLager() {
     const unit     = i.recipe_unit || i.unit || 'stk';
     const received = Math.round((receivedIngMap[i.id] || 0) * 100) / 100;
     const used     = Math.round((usedIngMap[i.id]     || 0) * 100) / 100;
-    const stock    = Math.round((received - used)      * 100) / 100;
+    const adj      = Math.round((adjIngMap[i.id]      || 0) * 100) / 100;
+    const stock    = Math.round((received - used + adj) * 100) / 100;
     const minStock = Number(i.min_stock);
 
     let statusHtml, rowBg = '';
@@ -5753,14 +5769,19 @@ async function buildIngLager() {
     const stockDisplay = stock <= 0
       ? `<strong style="color:#e53935;font-size:1.1rem">${stock}</strong>`
       : `<strong style="font-size:1.1rem">${stock}</strong>`;
+    const adjDisplay = adj !== 0 ? ` <span style="color:#888;font-size:0.8rem">(${adj > 0 ? '+' : ''}${adj} just.)</span>` : '';
 
     return `<tr style="border-bottom:1px solid var(--bg3);${rowBg}">
       <td style="padding:10px 8px;font-weight:500">🧂 ${esc(i.name)}</td>
       <td style="padding:10px 8px;text-align:center;color:#555">${received} ${esc(unit)}</td>
       <td style="padding:10px 8px;text-align:center;color:#555">${used} ${esc(unit)}</td>
-      <td style="padding:10px 8px;text-align:center">${stockDisplay} ${esc(unit)}</td>
+      <td style="padding:10px 8px;text-align:center">${stockDisplay}${adjDisplay} ${esc(unit)}</td>
       <td style="padding:10px 8px;text-align:center;color:#555">${minStock} ${esc(unit)}</td>
       <td style="padding:10px 8px;text-align:center">${statusHtml}</td>
+      <td style="padding:10px 8px;text-align:center">
+        <button class="btn" style="font-size:0.8rem;padding:3px 10px"
+          onclick="openIngStockCount(${i.id}, ${stock}, '${i.name.replace(/'/g,"\\'")}', '${esc(unit)}')">Tell opp</button>
+      </td>
     </tr>`;
   });
 
@@ -5774,23 +5795,24 @@ async function buildIngLager() {
       <h2 style="margin:0 0 12px;font-size:1.2rem">🧂 Ingredienser (kantine)</h2>
       ${alertBanner}
       <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;min-width:480px">
+        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;min-width:560px">
           <thead>
             <tr style="background:var(--bg2);color:#666;font-size:0.78rem;text-transform:uppercase">
               <th style="padding:8px;text-align:left">Ingrediens</th>
               <th style="padding:8px;text-align:center">Mottatt</th>
-              <th style="padding:8px;text-align:center">Brukt</th>
+              <th style="padding:8px;text-align:center">Brukt (salg)</th>
               <th style="padding:8px;text-align:center">På lager</th>
               <th style="padding:8px;text-align:center">Min. lager</th>
               <th style="padding:8px;text-align:center">Status</th>
+              <th style="padding:8px"></th>
             </tr>
           </thead>
           <tbody>${rows.join('')}</tbody>
         </table>
       </div>
       <p style="margin-top:12px;font-size:0.82rem;color:#aaa">
-        💡 Mottatt = innkjøp registrert fra kantine · Brukt = beregnet fra produksjonslogg og oppskrift ·
-        Min. lager settes i Oppskrifter → Ingredienser → rediger.
+        💡 Mottatt = innkjøp fra kantine (omregnet via "Mengde du fikk") · Brukt = beregnet fra salg og oppskrift ·
+        Min. lager og enheter settes i Oppskrifter → Ingredienser → rediger.
       </p>
     </div>`;
 }
@@ -5852,6 +5874,275 @@ async function saveStockCount(productId, currentStock) {
   }
 }
 
+// ── Ingredient stock count (kantine ingredients) ──────────────────────────────
+function openIngStockCount(ingId, currentStock, name, unit) {
+  ST._ingStockCountModal = { ingId, currentStock, name, unit };
+  renderTab();
+}
+
+function buildIngStockCountModal() {
+  if (!ST._ingStockCountModal) return '';
+  const { ingId, currentStock, name, unit } = ST._ingStockCountModal;
+  return `
+  <div class="modal-bg" onclick="if(event.target===this){ST._ingStockCountModal=null;renderTab()}">
+    <div class="modal">
+      <h3>🧂 Lagertelling — ${esc(name)}</h3>
+      <p style="font-size:0.88rem;color:var(--text2);margin-bottom:1rem">
+        Beregnet beholdning: <strong>${currentStock} ${esc(unit)}</strong>.<br>
+        Tast inn faktisk antall etter opptelling.
+      </p>
+      <div class="form-row">
+        <label>Faktisk antall på lager</label>
+        <input type="number" id="isc-actual" min="0" step="0.5" placeholder="0" style="width:140px" autofocus>
+        <span style="margin-left:6px;color:var(--text2)">${esc(unit)}</span>
+      </div>
+      <div class="form-row">
+        <label>Notat (valgfritt)</label>
+        <input type="text" id="isc-note" placeholder="f.eks. Opptelling torsdag">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveIngStockCount(${ingId}, ${currentStock})">💾 Lagre justering</button>
+        <button class="btn" onclick="ST._ingStockCountModal=null;renderTab()">Avbryt</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveIngStockCount(ingId, currentStock) {
+  const actualStr = el('isc-actual')?.value?.trim();
+  const actual    = parseFloat(actualStr);
+  if (actualStr === '' || isNaN(actual) || actual < 0) {
+    showAlert('Skriv inn et gyldig antall (0 eller mer)', 'error'); return;
+  }
+  const note  = el('isc-note')?.value?.trim() || 'Manuell opptelling';
+  const delta = Math.round((actual - currentStock) * 100) / 100;
+  try {
+    await sbPost('ingredient_adjustments', [{
+      ingredient_id:   ingId,
+      adjustment_date: today(),
+      quantity:        delta,
+      note
+    }]);
+    ST._ingStockCountModal = null;
+    showAlert(`Lagertelling lagret! (${delta >= 0 ? '+' : ''}${delta} justering)`);
+    refreshLagerStatus();
+    await renderTab();
+  } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
+}
+
+// ── Manual stock (external supplier items) ────────────────────────────────────
+async function buildManualLager() {
+  let items = [];
+  try { items = await sbGet('manual_stock?order=category,name'); } catch(e) { return ''; }
+
+  const categories = {};
+  items.forEach(item => {
+    const cat = item.category || 'Annet';
+    if (!categories[cat]) categories[cat] = [];
+    categories[cat].push(item);
+  });
+
+  let alertCount = 0;
+  items.forEach(item => {
+    if (item.min_stock != null && Number(item.current_count) < Number(item.min_stock)) alertCount++;
+  });
+
+  const alertBanner = alertCount > 0 ? `
+    <div style="background:#fff3cd;border:1px solid #e6a817;border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:0.9rem">
+      ⚠️ <strong>${alertCount} vare${alertCount > 1 ? 'r' : ''}</strong> er under minimumsbeholdning.
+    </div>` : '';
+
+  const renderCat = (catName, catItems) => {
+    const catRows = catItems.map(item => {
+      const count    = Number(item.current_count || 0);
+      const minStock = item.min_stock != null ? Number(item.min_stock) : null;
+      let statusHtml = '<span style="color:#aaa;font-size:0.85rem">—</span>';
+      let rowBg = '';
+      if (minStock != null) {
+        if (count <= 0) {
+          statusHtml = '<span style="background:#e53935;color:#fff;border-radius:4px;padding:2px 9px;font-size:0.8rem;font-weight:600">🔴 Tomt</span>';
+          rowBg = 'background:#fff5f5;';
+        } else if (count < minStock) {
+          statusHtml = '<span style="background:#e6a817;color:#fff;border-radius:4px;padding:2px 9px;font-size:0.8rem;font-weight:600">🟡 Lavt</span>';
+          rowBg = 'background:#fffbef;';
+        } else {
+          statusHtml = '<span style="background:#43a047;color:#fff;border-radius:4px;padding:2px 9px;font-size:0.8rem;font-weight:600">🟢 OK</span>';
+        }
+      }
+      const lastUp = item.last_updated ? fmtDate(item.last_updated) : '—';
+      const nameEsc = item.name.replace(/'/g, "\\'");
+      const unitEsc = (item.unit || 'stk').replace(/'/g, "\\'");
+      return `<tr style="border-bottom:1px solid var(--bg3);${rowBg}">
+        <td style="padding:10px 8px;font-weight:500">🏪 ${esc(item.name)}</td>
+        <td style="padding:10px 8px;text-align:center;font-weight:700;font-size:1.05rem">${count} ${esc(item.unit||'stk')}</td>
+        <td style="padding:10px 8px;text-align:center;color:#555">${minStock != null ? minStock + ' ' + esc(item.unit||'stk') : '—'}</td>
+        <td style="padding:10px 8px;text-align:center">${statusHtml}</td>
+        <td style="padding:10px 8px;text-align:center;font-size:0.82rem;color:#888">${lastUp}</td>
+        <td style="padding:10px 8px;text-align:center;display:flex;gap:4px;justify-content:center">
+          <button class="btn" style="font-size:0.8rem;padding:3px 10px"
+            onclick="openManualStockCount(${item.id}, ${count}, '${nameEsc}', '${unitEsc}')">Tell opp</button>
+          ${ST.role === 'admin' ? `<button class="btn" style="font-size:0.8rem;padding:3px 8px" onclick="openManualStockEdit(${item.id})">✏️</button>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
+    return `
+      <div style="font-size:0.78rem;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.06em;margin:16px 0 4px">${esc(catName)}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:0.9rem;min-width:500px">
+        <thead><tr style="background:var(--bg2);color:#666;font-size:0.78rem;text-transform:uppercase">
+          <th style="padding:6px 8px;text-align:left">Vare</th>
+          <th style="padding:6px 8px;text-align:center">Antall</th>
+          <th style="padding:6px 8px;text-align:center">Min. lager</th>
+          <th style="padding:6px 8px;text-align:center">Status</th>
+          <th style="padding:6px 8px;text-align:center">Sist oppdatert</th>
+          <th style="padding:6px 8px"></th>
+        </tr></thead>
+        <tbody>${catRows}</tbody>
+      </table>`;
+  };
+
+  const catSections = Object.entries(categories).map(([cat, ci]) => renderCat(cat, ci)).join('');
+
+  return `
+    <div style="padding:0 16px 16px;max-width:960px;margin-top:32px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <h2 style="margin:0;font-size:1.2rem">🏪 Manuelt lager</h2>
+        ${ST.role === 'admin' ? `<button class="btn btn-sm btn-primary" onclick="openManualStockEdit(0)" style="font-size:0.82rem">+ Legg til vare</button>` : ''}
+      </div>
+      ${items.length === 0
+        ? `<div class="empty">Ingen varer lagt til ennå.${ST.role === 'admin' ? ' Bruk "+ Legg til vare" for å starte.' : ''}</div>`
+        : `${alertBanner}<div style="overflow-x:auto">${catSections}</div>
+           <p style="margin-top:12px;font-size:0.82rem;color:#aaa">
+             💡 Oppdater antall ved ukentlig opptelling · 🏪 = ekstern leverandør
+           </p>`}
+    </div>`;
+}
+
+function openManualStockCount(id, currentCount, name, unit) {
+  ST._manualStockCountModal = { id, currentCount, name, unit };
+  renderTab();
+}
+
+function buildManualStockCountModal() {
+  if (!ST._manualStockCountModal) return '';
+  const { id, currentCount, name, unit } = ST._manualStockCountModal;
+  return `
+  <div class="modal-bg" onclick="if(event.target===this){ST._manualStockCountModal=null;renderTab()}">
+    <div class="modal">
+      <h3>🏪 Lagertelling — ${esc(name)}</h3>
+      <p style="font-size:0.88rem;color:var(--text2);margin-bottom:1rem">
+        Sist registrert: <strong>${currentCount} ${esc(unit)}</strong>.<br>
+        Tast inn faktisk antall etter opptelling.
+      </p>
+      <div class="form-row">
+        <label>Faktisk antall på lager</label>
+        <input type="number" id="msc-actual" min="0" step="1" placeholder="0" style="width:140px" autofocus>
+        <span style="margin-left:6px;color:var(--text2)">${esc(unit)}</span>
+      </div>
+      <div class="form-row">
+        <label>Notat (valgfritt)</label>
+        <input type="text" id="msc-note" placeholder="f.eks. Opptelling torsdag">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveManualStockCount(${id})">💾 Lagre</button>
+        <button class="btn" onclick="ST._manualStockCountModal=null;renderTab()">Avbryt</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveManualStockCount(id) {
+  const actualStr = el('msc-actual')?.value?.trim();
+  const actual    = parseFloat(actualStr);
+  if (actualStr === '' || isNaN(actual) || actual < 0) {
+    showAlert('Skriv inn et gyldig antall (0 eller mer)', 'error'); return;
+  }
+  const note = el('msc-note')?.value?.trim() || null;
+  try {
+    await sbPatch(`manual_stock?id=eq.${id}`, { current_count: actual, last_updated: today(), note });
+    ST._manualStockCountModal = null;
+    showAlert('Lagertelling lagret!');
+    refreshLagerStatus();
+    await renderTab();
+  } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
+}
+
+// Admin: add/edit manual stock items
+function openManualStockEdit(id) {
+  ST._manualStockEditModal = { id };
+  renderTab();
+}
+
+function buildManualStockEditModal() {
+  if (!ST._manualStockEditModal) return '';
+  const { id } = ST._manualStockEditModal;
+  const isNew = !id;
+  const item = id ? (ST._manualStockCache || []).find(i => i.id === id) || {} : {};
+  // Gather distinct categories for autocomplete
+  const cats = [...new Set((ST._manualStockCache || []).map(i => i.category).filter(Boolean))].sort();
+  return `
+  <div class="modal-bg" onclick="if(event.target===this){ST._manualStockEditModal=null;renderTab()}">
+    <div class="modal">
+      <h3>${isNew ? '+ Legg til vare' : 'Rediger vare'}</h3>
+      <div class="form-row"><label>Navn</label><input id="mse-name" value="${esc(item.name||'')}" placeholder="f.eks. Pepsi Max 0,5L"></div>
+      <div class="grid2">
+        <div class="form-row"><label>Kategori</label>
+          <input id="mse-cat" list="mse-cat-list" value="${esc(item.category||'')}" placeholder="f.eks. Drikkevarer">
+          <datalist id="mse-cat-list">${cats.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+        </div>
+        <div class="form-row"><label>Enhet</label>
+          <input id="mse-unit" value="${esc(item.unit||'stk')}" placeholder="stk / liter / kg">
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="form-row"><label>Startbeholdning</label><input type="number" id="mse-count" min="0" step="1" value="${item.current_count != null ? item.current_count : 0}"></div>
+        <div class="form-row"><label>Min. lager</label><input type="number" id="mse-min" min="0" step="1" value="${item.min_stock != null ? item.min_stock : ''}" placeholder="Ikke satt"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="saveManualStockItem(${id||0})">${isNew ? 'Legg til' : 'Lagre'}</button>
+        ${!isNew ? `<button class="btn btn-danger" onclick="deleteManualStockItem(${id})">🗑️ Slett</button>` : ''}
+        <button class="btn" onclick="ST._manualStockEditModal=null;renderTab()">Avbryt</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function saveManualStockItem(id) {
+  const name  = el('mse-name')?.value?.trim();
+  const cat   = el('mse-cat')?.value?.trim()  || null;
+  const unit  = el('mse-unit')?.value?.trim() || 'stk';
+  const count = parseFloat(el('mse-count')?.value) || 0;
+  const minRaw = el('mse-min')?.value?.trim();
+  const min_stock = minRaw !== '' ? parseFloat(minRaw) : null;
+  if (!name) { showAlert('Navn er påkrevd', 'error'); return; }
+  try {
+    if (id) {
+      await sbPatch(`manual_stock?id=eq.${id}`, { name, category: cat, unit, min_stock });
+      if (ST._manualStockCache) {
+        const idx = ST._manualStockCache.findIndex(i => i.id === id);
+        if (idx >= 0) ST._manualStockCache[idx] = { ...ST._manualStockCache[idx], name, category: cat, unit, min_stock };
+      }
+    } else {
+      const [np] = await sbPost('manual_stock', [{ name, category: cat, unit, current_count: count, min_stock, last_updated: today() }]);
+      if (!ST._manualStockCache) ST._manualStockCache = [];
+      ST._manualStockCache.push(np);
+    }
+    ST._manualStockEditModal = null;
+    showAlert(id ? 'Vare oppdatert!' : 'Vare lagt til!');
+    await renderTab();
+  } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
+}
+
+async function deleteManualStockItem(id) {
+  if (!confirm('Slette denne varen fra manuelt lager?')) return;
+  try {
+    await sbDelete(`manual_stock?id=eq.${id}`);
+    if (ST._manualStockCache) ST._manualStockCache = ST._manualStockCache.filter(i => i.id !== id);
+    ST._manualStockEditModal = null;
+    showAlert('Vare slettet');
+    await renderTab();
+  } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
+}
+
 async function refreshLagerStatus() {
   try {
     let low = 0;
@@ -5911,32 +6202,50 @@ async function refreshLagerStatus() {
       });
     }
 
-    // ── Ingredients ──
+    // ── Ingredients (sales-based consumption) ──
     const lagerIngs = ST.ingredients.filter(i => i.min_stock != null && i.canteen_product_id != null);
     if (lagerIngs.length > 0) {
       const ingIdList = lagerIngs.map(i => i.id).join(',');
-      const [purchaseItems, ingRecipeItems] = await Promise.all([
+      const [purchaseItems, ingRecipeItems, ingAdj] = await Promise.all([
         sbGet(`purchase_items?ingredient_id=in.(${ingIdList})&select=ingredient_id,quantity`),
-        sbGet(`recipe_items?ingredient_id=in.(${ingIdList})&select=cafe_product_id,ingredient_id,quantity`)
+        sbGet(`recipe_items?ingredient_id=in.(${ingIdList})&select=cafe_product_id,ingredient_id,quantity`),
+        sbGet(`ingredient_adjustments?ingredient_id=in.(${ingIdList})&select=ingredient_id,quantity`).catch(() => [])
       ]);
+      // Received: apply units_per_purchase for unit conversion
       const receivedIngMap = {};
-      purchaseItems.forEach(r => { receivedIngMap[r.ingredient_id] = (receivedIngMap[r.ingredient_id] || 0) + Number(r.quantity || 0); });
+      purchaseItems.forEach(r => {
+        const ing = lagerIngs.find(i => i.id === r.ingredient_id);
+        const upp = parseFloat(ing?.units_per_purchase || 1);
+        receivedIngMap[r.ingredient_id] = (receivedIngMap[r.ingredient_id] || 0) + Number(r.quantity || 0) * upp;
+      });
+      // Adjustments
+      const ingAdjMap = {};
+      ingAdj.forEach(r => { ingAdjMap[r.ingredient_id] = (ingAdjMap[r.ingredient_id] || 0) + Number(r.quantity || 0); });
+      // Consumed: daily_sales × recipe quantity
       const usedIngMap = {};
       if (ingRecipeItems.length > 0) {
         const relatedCpIds = [...new Set(ingRecipeItems.map(r => r.cafe_product_id))];
-        const prodLogs2 = await sbGet(`production_log?cafe_product_id=in.(${relatedCpIds.join(',')})&select=cafe_product_id,quantity_produced`).catch(() => []);
-        const prodMap2 = {};
-        prodLogs2.forEach(r => { prodMap2[r.cafe_product_id] = (prodMap2[r.cafe_product_id] || 0) + Number(r.quantity_produced || 0); });
+        const salesData2 = await sbGet(`daily_sales?cafe_product_id=in.(${relatedCpIds.join(',')})&select=cafe_product_id,units_sold`).catch(() => []);
+        const salesMap2 = {};
+        salesData2.forEach(r => { salesMap2[r.cafe_product_id] = (salesMap2[r.cafe_product_id] || 0) + Number(r.units_sold || 0); });
         ingRecipeItems.forEach(r => {
-          const used = (prodMap2[r.cafe_product_id] || 0) * Number(r.quantity || 0);
+          const used = (salesMap2[r.cafe_product_id] || 0) * Number(r.quantity || 0);
           usedIngMap[r.ingredient_id] = (usedIngMap[r.ingredient_id] || 0) + used;
         });
       }
       lagerIngs.forEach(i => {
-        const stock = (receivedIngMap[i.id] || 0) - (usedIngMap[i.id] || 0);
+        const stock = (receivedIngMap[i.id] || 0) - (usedIngMap[i.id] || 0) + (ingAdjMap[i.id] || 0);
         if (stock < Number(i.min_stock)) low++;
       });
     }
+
+    // ── Manual stock (external supplier items) ──
+    try {
+      const manualItems = await sbGet(`manual_stock?min_stock=not.is.null&select=current_count,min_stock`);
+      manualItems.forEach(m => {
+        if (Number(m.current_count || 0) < Number(m.min_stock)) low++;
+      });
+    } catch(e) { /* ignore if table doesn't exist yet */ }
 
     ST._lagerLow = low;
     renderNav();
