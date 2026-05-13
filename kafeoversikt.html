@@ -4536,12 +4536,12 @@ async function printOrdre(id) {
     <div class="print-header"><h2>FAKTURA GRUNNLAG</h2></div>
     <div class="print-meta">
       <strong>Ordrenr.:</strong> #${order.id}<br><br>
-      <strong>Faktureres til:</strong> ${esc(order.invoice_to || order.customer_name)}<br>
-      ${order.org_nr          ? `<strong>Org. Nr.:</strong> ${esc(order.org_nr)}<br>` : ''}
-      ${order.invoice_address ? `<strong>Fakturaadresse:</strong> ${esc(order.invoice_address)}<br>` : ''}
-      ${order.contact_name    ? `<strong>Kontaktperson:</strong> ${esc(order.contact_name)}<br>` : ''}
-      ${order.invoice_ref     ? `<strong>Fakturareferanse:</strong> ${esc(order.invoice_ref)}<br>` : ''}
-      ${order.email           ? `<strong>E-post:</strong> ${esc(order.email)}<br>` : ''}
+      <strong>Faktureres til:</strong> ${esc(order.invoice_to || order.customer_name || '—')}<br>
+      <strong>Org. Nr.:</strong> ${esc(order.org_nr || '')}<br>
+      <strong>Fakturaadresse:</strong> ${esc(order.invoice_address || '')}<br>
+      <strong>Kontaktperson:</strong> ${esc(order.contact_name || '')}<br>
+      <strong>Fakturareferanse:</strong> ${esc(order.invoice_ref || '')}<br>
+      ${order.email ? `<strong>E-post:</strong> ${esc(order.email)}<br>` : ''}
       <br>
       <strong>Dato:</strong> ${fmtDate(order.order_date)}${order.order_time ? ' kl. ' + esc(order.order_time) : ''}<br>
       ${delivLabel            ? `<strong>Leveringsmåte:</strong> ${delivLabel}<br>` : ''}
