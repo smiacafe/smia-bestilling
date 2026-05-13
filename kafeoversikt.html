@@ -6079,11 +6079,15 @@ function buildManualStockEditModal() {
   const item = id ? (ST._manualStockCache || []).find(i => i.id === id) || {} : {};
   // Gather distinct categories for autocomplete
   const cats = [...new Set((ST._manualStockCache || []).map(i => i.category).filter(Boolean))].sort();
+  const ingNames = (ST.ingredients || []).map(i => i.name).filter(Boolean).sort();
   return `
   <div class="modal-bg" onclick="if(event.target===this){ST._manualStockEditModal=null;renderTab()}">
     <div class="modal">
       <h3>${isNew ? '+ Legg til vare' : 'Rediger vare'}</h3>
-      <div class="form-row"><label>Navn</label><input id="mse-name" value="${esc(item.name||'')}" placeholder="f.eks. Pepsi Max 0,5L"></div>
+      <div class="form-row"><label>Navn</label>
+        <input id="mse-name" list="mse-name-list" value="${esc(item.name||'')}" placeholder="f.eks. Pepsi Max 0,5L">
+        <datalist id="mse-name-list">${ingNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+      </div>
       <div class="grid2">
         <div class="form-row"><label>Kategori</label>
           <input id="mse-cat" list="mse-cat-list" value="${esc(item.category||'')}" placeholder="f.eks. Drikkevarer">
