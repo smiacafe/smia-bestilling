@@ -896,7 +896,6 @@ async function buildAvfall() {
       wlog.forEach(r => {
         if (r.waste_type === 'kassert')     ST._wasteState['wk_' + r.cafe_product_id] = String(r.quantity);
         if (r.waste_type === '2good2go')    ST._wasteState['wg_' + r.cafe_product_id] = String(r.quantity);
-        if (r.waste_type === 'personalmat') ST._wasteState['wm_' + r.cafe_product_id] = String(r.quantity);
       });
       plog.forEach(r => { ST._wasteState['wp_' + r.cafe_product_id] = String(r.quantity_produced); });
       ST._wasteState['_loaded_'   + logDate] = true;
@@ -921,10 +920,9 @@ async function buildAvfall() {
         const prod = parseFloat(ST._wasteState['wp_' + p.id]) || 0;
         const svinn = parseFloat(ST._wasteState['wk_' + p.id]) || 0;
         const g2g   = parseFloat(ST._wasteState['wg_' + p.id]) || 0;
-        const mat   = parseFloat(ST._wasteState['wm_' + p.id]) || 0;
-        const uforklart = prod - sold - svinn - g2g - mat;
+        const uforklart = prod - sold - svinn - g2g;
         const uColor = uforklart === 0 ? (prod===0&&sold===0?'var(--text2)':'#3B6D11') : uforklart > 0 ? '#856404' : '#A32D2D';
-        const uText  = (prod===0&&sold===0&&svinn===0&&g2g===0&&mat===0) ? '—'
+        const uText  = (prod===0&&sold===0&&svinn===0&&g2g===0) ? '—'
                      : uforklart === 0 ? '✓ 0'
                      : (uforklart > 0 ? '+' : '') + fmtN(uforklart);
         const unused = (usageCounts[p.id]||0) === 0;
@@ -937,7 +935,6 @@ async function buildAvfall() {
           <td style="text-align:center;padding:4px;font-weight:500;color:var(--text2)">${fmtN(sold)}</td>
           <td style="padding:4px 2px">${stepper('wk_'+p.id,'','#e8c0c0','#fcebeb',halfStep)}</td>
           <td style="padding:4px 2px">${stepper('wg_'+p.id,'','#b8dba0','#eaf3de',halfStep)}</td>
-          <td style="padding:4px 2px">${stepper('wm_'+p.id,'','#f0d0a0','#fdf3e3',halfStep)}</td>
           <td style="text-align:center;padding:4px;font-weight:600;color:${uColor}" id="avst-${p.id}">${uText}</td>
         </tr>`;
       }).join('');
@@ -978,7 +975,6 @@ async function buildAvfall() {
             <th style="text-align:center;color:var(--text2)">Solgt (POS)</th>
             <th style="text-align:center">🗑️ Svinn</th>
             <th style="text-align:center">🟢 2Good2Go</th>
-            <th style="text-align:center">🍽️ Personalmat</th>
             <th style="text-align:center">= Uforklart</th>
           </tr>
         </thead>
@@ -1003,11 +999,9 @@ async function saveDagligRapport() {
     const prod  = parseFloat(ST._wasteState['wp_' + p.id]) || 0;
     const svinn = parseFloat(ST._wasteState['wk_' + p.id]) || 0;
     const g2g   = parseFloat(ST._wasteState['wg_' + p.id]) || 0;
-    const mat   = parseFloat(ST._wasteState['wm_' + p.id]) || 0;
     if (prod  > 0) prodRows.push({ log_date: logDate, cafe_product_id: p.id, product_name: p.name, quantity_produced: prod });
     if (svinn > 0) wasteRows.push({ log_date: logDate, cafe_product_id: p.id, product_name: p.name, quantity: svinn, waste_type: 'kassert' });
     if (g2g   > 0) wasteRows.push({ log_date: logDate, cafe_product_id: p.id, product_name: p.name, quantity: g2g,   waste_type: '2good2go' });
-    if (mat   > 0) wasteRows.push({ log_date: logDate, cafe_product_id: p.id, product_name: p.name, quantity: mat,   waste_type: 'personalmat' });
   }
 
   if (wasteRows.length === 0 && prodRows.length === 0) {
