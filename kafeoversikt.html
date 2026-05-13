@@ -6080,8 +6080,8 @@ function buildManualStockEditModal() {
   const item = id ? (ST._manualStockCache || []).find(i => i.id === id) || {} : {};
   // Gather distinct categories for autocomplete
   const manualCats = (ST._manualStockCache || []).map(i => i.category).filter(Boolean);
-  const ingCats    = (ST.ingredients || []).map(i => i.category).filter(Boolean);
-  const cats = [...new Set([...manualCats, ...ingCats])].sort();
+  const prodCats   = (ST.cafeProducts || []).map(p => p.category).filter(Boolean);
+  const cats = [...new Set([...prodCats, ...manualCats])].sort();
   const ingNames = (ST.ingredients || []).map(i => i.name).filter(Boolean).sort();
   return `
   <div class="modal-bg" onclick="if(event.target===this){ST._manualStockEditModal=null;renderTab()}">
