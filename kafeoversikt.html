@@ -5217,7 +5217,7 @@ async function buildInnsikt() {
       ptSold = months.map(m=>monthly[m].sold); ptWaste = months.map(m=>monthly[m].waste);
     }
 
-    ST._chartData = { mode: 'produkt', ptLabels, ptProd, ptSold, ptWaste, _pKassert: kassertU, _pG2G: g2gU, _pMat: matU };
+    ST._chartData = { mode: 'produkt', ptLabels, ptProd, ptSold, ptWaste, _pSold: totalSold, _pKassert: kassertU, _pG2G: g2gU };
 
     const costPerUnit  = costMap[selectedId] || 0;
     const hasCost      = hasAnyCostSet(selectedId);
@@ -5257,8 +5257,8 @@ async function buildInnsikt() {
         ${!hasChart?'<div class="empty">Ingen data i denne perioden</div>':'<div class="chart-wrap" style="height:280px"><canvas id="chart-produkt"></canvas></div>'}
       </div>
       <div class="card">
-        <div class="card-header"><span class="card-title">Svinnfordeling</span></div>
-        ${totalWasteU===0?'<div class="empty">Ingen svinndata</div>':'<div class="chart-wrap"><canvas id="chart-produkt-waste"></canvas></div>'}
+        <div class="card-header"><span class="card-title">Inntekt og svinn</span></div>
+        ${totalSold===0&&totalWasteU===0?'<div class="empty">Ingen data</div>':'<div class="chart-wrap"><canvas id="chart-produkt-waste"></canvas></div>'}
       </div>
     </div>`;
   }
@@ -5453,14 +5453,18 @@ function initCharts() {
       if (k === 0) {
         pwCtx.parentElement.innerHTML = '<div class="empty">Ingen svinndata</div>';
       } else {
-        // rebuild waste breakdown from raw data via filter — use totals stored in ST._chartData
-        const kassertSum  = (ST._chartData._pKassert  || 0);
-        const g2gSum      = (ST._chartData._pG2G      || 0);
-        const matSum      = (ST._chartData._pMat      || 0);
+        // rebuild breakdown from totals stored in ST._chartData
+        const soldSum    = (ST._chartData._pSold    || 0);
+        const kassertSum = (ST._chartData._pKassert || 0);
+        const g2gSum     = (ST._chartData._pG2G     || 0);
+        // Only include slices with data > 0
+        const pieLabels = [], pieData = [], pieBg = [], pieBorder = [];
+        if (soldSum    > 0) { pieLabels.push('✅ Solgt');       pieData.push(soldSum);    pieBg.push('#2e7d3299'); pieBorder.push('#2e7d32'); }
+        if (kassertSum > 0) { pieLabels.push('🗑️ Kassert');    pieData.push(kassertSum); pieBg.push('#e74c3c99'); pieBorder.push('#e74c3c'); }
+        if (g2gSum     > 0) { pieLabels.push('🟢 2Good2Go');   pieData.push(g2gSum);     pieBg.push('#27ae6099'); pieBorder.push('#27ae60'); }
         ST.charts.produktWaste = new Chart(pwCtx, {
           type: 'pie',
-          data: { labels: ['🗑️ Kassert', '🟢 2Good2Go', '🍽️ Personalmat'],
-            datasets: [{ data: [kassertSum, g2gSum, matSum], backgroundColor: ['#e74c3c99','#27ae6099','#f39c1299'], borderColor: ['#e74c3c','#27ae60','#f39c12'], borderWidth: 2 }] },
+          data: { labels: pieLabels, datasets: [{ data: pieData, backgroundColor: pieBg, borderColor: pieBorder, borderWidth: 2 }] },
           options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } }
         });
       }
