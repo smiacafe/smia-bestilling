@@ -5085,7 +5085,7 @@ async function buildInnsikt() {
     } catch(e) { /* best-effort */ }
 
     const wasteArr = Object.entries(wasteByProd).map(([key, w]) => {
-      const total     = w.kassert + w.g2g + w.personalmat;
+      const total     = w.kassert + w.g2g;
       const prod      = prodByProd[key]  || 0;
       const sold      = salesByProd[key] || soldByKey[key] || 0;
       const wasteRate = prod > 0 ? (total / prod * 100) : null;
@@ -5131,11 +5131,10 @@ async function buildInnsikt() {
 
     const totKassert = wasteArr.reduce((s,w)=>s+w.kassert,0);
     const totG2G     = wasteArr.reduce((s,w)=>s+w.g2g,0);
-    const totMat     = wasteArr.reduce((s,w)=>s+w.personalmat,0);
-    const totAll     = totKassert + totG2G + totMat;
+    const totAll     = totKassert + totG2G;
 
     const tableRows = wasteArr.length === 0
-      ? `<tr><td colspan="8" style="text-align:center;color:#aaa;padding:16px">Ingen svinndata i denne perioden</td></tr>`
+      ? `<tr><td colspan="7" style="text-align:center;color:#aaa;padding:16px">Ingen svinndata i denne perioden</td></tr>`
       : wasteArr.map(w => {
           const rateCol = w.wasteRate==null?'#aaa':w.wasteRate>30?'#e53935':w.wasteRate>15?'#e6a817':'#43a047';
           return `<tr style="border-bottom:1px solid var(--bg3)">
@@ -5144,18 +5143,16 @@ async function buildInnsikt() {
             <td style="padding:8px 6px;text-align:center;color:#555">${w.sold>0?fmtN(w.sold):'—'}</td>
             <td style="padding:8px 6px;text-align:center;color:#e53935">${w.kassert>0?fmtN(w.kassert):'—'}</td>
             <td style="padding:8px 6px;text-align:center;color:#27ae60">${w.g2g>0?fmtN(w.g2g):'—'}</td>
-            <td style="padding:8px 6px;text-align:center;color:#e6a817">${w.personalmat>0?fmtN(w.personalmat):'—'}</td>
             <td style="padding:8px 6px;text-align:center;font-weight:600">${fmtN(w.total)}</td>
             <td style="padding:8px 6px;text-align:center;font-weight:600;color:${rateCol}">${w.wasteRate!=null?fmtN(w.wasteRate)+'%':'—'}</td>
           </tr>`;
         }).join('');
 
     return `${periodBar}${subNav}
-    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
       <div class="stat"><div class="stat-val">${fmtN(totAll)}</div><div class="stat-label">Total svinn</div></div>
       <div class="stat"><div class="stat-val" style="color:#e53935">${fmtN(totKassert)}</div><div class="stat-label">🗑️ Kassert</div></div>
       <div class="stat"><div class="stat-val" style="color:#27ae60">${fmtN(totG2G)}</div><div class="stat-label">🟢 2Good2Go</div></div>
-      <div class="stat"><div class="stat-val" style="color:#e6a817">${fmtN(totMat)}</div><div class="stat-label">🍽️ Personalmat</div></div>
     </div>
     <div class="grid2">
       <div class="card">
@@ -5178,7 +5175,6 @@ async function buildInnsikt() {
               <th style="padding:8px 6px;text-align:center">Solgt</th>
               <th style="padding:8px 6px;text-align:center;color:#e53935">🗑️ Kassert</th>
               <th style="padding:8px 6px;text-align:center;color:#27ae60">🟢 2G2G</th>
-              <th style="padding:8px 6px;text-align:center;color:#e6a817">🍽️ Personalmat</th>
               <th style="padding:8px 6px;text-align:center">Total svinn</th>
               <th style="padding:8px 6px;text-align:center">Svinn %</th>
             </tr>
