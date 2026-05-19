@@ -766,6 +766,9 @@ function updateAvstemming() {
 }
 
 async function buildAvfall() {
+  if (ST.role === 'admin' && ST.subTab.avfall === 'rapporter') {
+    return await buildDagligRapporter();
+  }
   const logDate = ST._wasteState['_date'] || today();
 
   // ── 1. Fetch saved-dates + POS-dates for calendar (cached) ──────────────
@@ -990,7 +993,14 @@ async function buildAvfall() {
   const prevDs  = prevDay.toISOString().slice(0,10);
   const nextDs  = nextDay.toISOString().slice(0,10);
 
+  const avfallSubNav = ST.role === 'admin' ? `
+  <div class="sub-nav" style="margin-bottom:1rem">
+    <button class="active">📋 Daglig rapport</button>
+    <button onclick="ST.subTab.avfall='rapporter';renderTab()">🖨️ Skriv ut rapport</button>
+  </div>` : '';
+
   return `
+  ${avfallSubNav}
   ${calendarHtml}
   <div class="card" id="daglig-rapport-form">
     <div class="card-header">
@@ -1072,6 +1082,194 @@ async function saveDagligRapport() {
   } catch(e) {
     showAlert('Feil ved lagring: ' + e.message, 'error');
   }
+}
+
+// =============================================================
+//  DAGLIG RAPPORT — PRINT VIEW (admin only)
+// =============================================================
+async function buildDagligRapporter() {
+  const period   = ST._rapportPeriod  || 'maaned';
+  const refDate  = ST._rapportDate    || today();
+  const [ry, rm] = refDate.split('-').map(Number);
+  const mNames   = ['Januar','Februar','Mars','April','Mai','Juni','Juli','August','September','Oktober','November','Desember'];
+
+  // ── Date range ──────────────────────────────────────────────
+  let dateFrom, dateTo, periodLabel;
+  if (period === 'dag') {
+    dateFrom = dateTo = refDate;
+    periodLabel = fmtDate(refDate);
+  } else if (period === 'uke') {
+    const d   = new Date(refDate);
+    const dow = d.getDay() === 0 ? 7 : d.getDay();
+    const mon = new Date(d); mon.setDate(d.getDate() - dow + 1);
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    dateFrom = mon.toISOString().slice(0,10);
+    dateTo   = sun.toISOString().slice(0,10);
+    const startOfYear = new Date(mon.getFullYear(), 0, 1);
+    const weekNum = Math.ceil((((mon - startOfYear) / 86400000) + startOfYear.getDay() + 1) / 7);
+    periodLabel = `Uke ${weekNum} ${mon.getFullYear()}: ${fmtDate(dateFrom)} – ${fmtDate(dateTo)}`;
+  } else if (period === 'maaned') {
+    const lastDay = new Date(ry, rm, 0).getDate();
+    dateFrom = `${ry}-${String(rm).padStart(2,'0')}-01`;
+    dateTo   = `${ry}-${String(rm).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+    periodLabel = `${mNames[rm-1]} ${ry}`;
+  } else {
+    dateFrom = `${ry}-01-01`;
+    dateTo   = `${ry}-12-31`;
+    periodLabel = `${ry}`;
+  }
+
+  // ── Fetch ────────────────────────────────────────────────────
+  let prodRows = [], wasteRows = [];
+  try {
+    [prodRows, wasteRows] = await Promise.all([
+      sbGet(`production_log?log_date=gte.${dateFrom}&log_date=lte.${dateTo}&select=cafe_product_id,product_name,quantity_produced,log_date&order=log_date`),
+      sbGet(`waste_log?log_date=gte.${dateFrom}&log_date=lte.${dateTo}&select=cafe_product_id,product_name,quantity,waste_type,log_date&order=log_date`)
+    ]);
+  } catch(e) {}
+
+  // ── Aggregate by product ─────────────────────────────────────
+  const byProd = {};
+  const rkey = r => r.cafe_product_id || r.product_name;
+  const ensure = r => { if (!byProd[rkey(r)]) byProd[rkey(r)] = { name: r.product_name, produced:0, kassert:0, g2g:0 }; };
+  prodRows.forEach(r  => { ensure(r); byProd[rkey(r)].produced += Number(r.quantity_produced||0); });
+  wasteRows.forEach(r => {
+    ensure(r);
+    if      (r.waste_type === 'kassert')    byProd[rkey(r)].kassert += Number(r.quantity||0);
+    else if (r.waste_type === '2good2go')   byProd[rkey(r)].g2g    += Number(r.quantity||0);
+  });
+  const rows    = Object.values(byProd).sort((a,b) => a.name.localeCompare(b.name, 'nb'));
+  const totProd = rows.reduce((s,r) => s+r.produced, 0);
+  const totKas  = rows.reduce((s,r) => s+r.kassert,  0);
+  const totG2G  = rows.reduce((s,r) => s+r.g2g,      0);
+  const totAll  = totKas + totG2G;
+  const totRate = totProd > 0 ? (totAll / totProd * 100) : null;
+  ST._rapportPrintData = { periodLabel, rows, totProd, totKas, totG2G };
+
+  // ── Period control ───────────────────────────────────────────
+  let periodInput = '';
+  if (period === 'dag' || period === 'uke') {
+    periodInput = `<input type="date" value="${refDate}" onchange="ST._rapportDate=this.value;renderTab()" style="width:160px">`;
+  } else if (period === 'maaned') {
+    periodInput = `<input type="month" value="${refDate.slice(0,7)}" onchange="ST._rapportDate=this.value+'-01';renderTab()" style="width:160px">`;
+  } else {
+    periodInput = `<input type="number" value="${ry}" min="2020" max="2099" onchange="ST._rapportDate=this.value+'-01-01';renderTab()" style="width:100px">`;
+  }
+
+  // ── Table ────────────────────────────────────────────────────
+  const rc = r => r==null?'#aaa':r>30?'#e53935':r>15?'#e6a817':'#43a047';
+  const tableRows = rows.length === 0
+    ? `<tr><td colspan="6" style="text-align:center;color:#aaa;padding:20px">Ingen data registrert i denne perioden</td></tr>`
+    : rows.map(r => {
+        const total = r.kassert + r.g2g;
+        const rate  = r.produced > 0 ? (total / r.produced * 100) : null;
+        return `<tr style="border-bottom:1px solid var(--bg3)">
+          <td style="padding:8px 6px;font-weight:500">${esc(r.name)}</td>
+          <td style="padding:8px 6px;text-align:center">${r.produced>0?fmtN(r.produced):'—'}</td>
+          <td style="padding:8px 6px;text-align:center;color:#e53935">${r.kassert>0?fmtN(r.kassert):'—'}</td>
+          <td style="padding:8px 6px;text-align:center;color:#27ae60">${r.g2g>0?fmtN(r.g2g):'—'}</td>
+          <td style="padding:8px 6px;text-align:center;font-weight:600">${total>0?fmtN(total):'—'}</td>
+          <td style="padding:8px 6px;text-align:center;font-weight:600;color:${rc(rate)}">${rate!=null?fmtN(rate)+'%':'—'}</td>
+        </tr>`;
+      }).join('');
+
+  const periodBtns = ['dag','uke','maaned','aar'].map(p => {
+    const lbl = {dag:'Dag',uke:'Uke',maaned:'Måned',aar:'År'}[p];
+    return `<button class="btn${period===p?' btn-primary':''}" onclick="ST._rapportPeriod='${p}';renderTab()">${lbl}</button>`;
+  }).join('');
+
+  return `
+  <div class="sub-nav" style="margin-bottom:1rem">
+    <button onclick="ST.subTab.avfall='rapport';renderTab()">📋 Daglig rapport</button>
+    <button class="active">🖨️ Skriv ut rapport</button>
+  </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">🖨️ Skriv ut rapport</span></div>
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:1rem">
+      ${periodBtns}
+      <div class="spacer"></div>
+      ${periodInput}
+    </div>
+    <div style="font-size:0.85rem;color:var(--text2);margin-bottom:1rem">
+      Periode: <strong>${esc(periodLabel)}</strong>
+    </div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:0.9rem;min-width:480px">
+        <thead><tr style="background:var(--bg2);color:#666;font-size:0.78rem;text-transform:uppercase">
+          <th style="padding:8px 6px;text-align:left">Produkt</th>
+          <th style="padding:8px 6px;text-align:center">🔵 Produsert</th>
+          <th style="padding:8px 6px;text-align:center;color:#e53935">🗑️ Kassert</th>
+          <th style="padding:8px 6px;text-align:center;color:#27ae60">🟢 2Good2Go</th>
+          <th style="padding:8px 6px;text-align:center">Total svinn</th>
+          <th style="padding:8px 6px;text-align:center">Svinn %</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+        ${rows.length > 0 ? `<tfoot><tr style="background:var(--bg2);font-weight:700;border-top:2px solid var(--border)">
+          <td style="padding:8px 6px">Totalt</td>
+          <td style="padding:8px 6px;text-align:center">${fmtN(totProd)}</td>
+          <td style="padding:8px 6px;text-align:center;color:#e53935">${fmtN(totKas)}</td>
+          <td style="padding:8px 6px;text-align:center;color:#27ae60">${fmtN(totG2G)}</td>
+          <td style="padding:8px 6px;text-align:center">${fmtN(totAll)}</td>
+          <td style="padding:8px 6px;text-align:center;color:${rc(totRate)}">${totRate!=null?fmtN(totRate)+'%':'—'}</td>
+        </tr></tfoot>` : ''}
+      </table>
+    </div>
+    ${rows.length > 0 ? `<div style="margin-top:1rem">
+      <button class="btn btn-primary" onclick="printDagligRapport()">🖨️ Skriv ut / lagre som PDF</button>
+    </div>` : ''}
+  </div>`;
+}
+
+function printDagligRapport() {
+  const d = ST._rapportPrintData;
+  if (!d) return;
+  const { periodLabel, rows, totProd, totKas, totG2G } = d;
+  const totAll  = totKas + totG2G;
+  const totRate = totProd > 0 ? (totAll / totProd * 100) : null;
+  const rc = r => r==null?'#000':r>30?'#c62828':r>15?'#e65100':'#2e7d32';
+
+  const tableRows = rows.map(r => {
+    const total = r.kassert + r.g2g;
+    const rate  = r.produced > 0 ? (total / r.produced * 100) : null;
+    return `<tr>
+      <td>${esc(r.name)}</td>
+      <td style="text-align:center">${r.produced>0?fmtN(r.produced):'—'}</td>
+      <td style="text-align:center">${r.kassert>0?fmtN(r.kassert):'—'}</td>
+      <td style="text-align:center">${r.g2g>0?fmtN(r.g2g):'—'}</td>
+      <td style="text-align:center;font-weight:600">${total>0?fmtN(total):'—'}</td>
+      <td style="text-align:center;font-weight:600;color:${rc(rate)}">${rate!=null?fmtN(rate)+'%':'—'}</td>
+    </tr>`;
+  }).join('');
+
+  el('print-area').innerHTML = `
+    <div class="print-header">
+      <h2>SMIA Kafé — Produksjons- og svinnrapport</h2>
+      <div class="print-meta">
+        <strong>Periode:</strong> ${esc(periodLabel)}<br>
+        <strong>Skrevet ut:</strong> ${fmtDate(today())}
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Produkt</th>
+        <th style="text-align:center">Produsert</th>
+        <th style="text-align:center">Kassert</th>
+        <th style="text-align:center">2Good2Go</th>
+        <th style="text-align:center">Total svinn</th>
+        <th style="text-align:center">Svinn %</th>
+      </tr></thead>
+      <tbody>${tableRows}</tbody>
+      <tfoot><tr style="font-weight:700;background:#f5f5f5">
+        <td>Totalt</td>
+        <td style="text-align:center">${fmtN(totProd)}</td>
+        <td style="text-align:center">${fmtN(totKas)}</td>
+        <td style="text-align:center">${fmtN(totG2G)}</td>
+        <td style="text-align:center">${fmtN(totAll)}</td>
+        <td style="text-align:center;color:${rc(totRate)}">${totRate!=null?fmtN(totRate)+'%':'—'}</td>
+      </tr></tfoot>
+    </table>
+    <div class="print-footer">SMIA Kafé · Vennesla kommune</div>`;
+  window.print();
 }
 
 // =============================================================
