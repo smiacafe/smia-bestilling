@@ -4214,6 +4214,8 @@ async function buildOrdreForesporsler() {
         ` : showActions && !isTable ? `
         <button class="btn btn-primary btn-sm" onclick="confirmRequest(${r.id},'${esc(r.email||'')}','${esc(r.contact_name||r.invoice_to||'')}','${esc(r.invoice_to||'')}')">✅ Bekreft, opprett ordre & send e-post</button>
         <button class="btn btn-sm" style="border-color:#e53935;color:#e53935" onclick="dismissRequest(${r.id},'${esc(r.email||'')}','${esc(r.contact_name||r.invoice_to||'')}')">❌ Avslå & send e-post</button>
+        ` : !showActions && r.status === 'confirmed' && !isTable ? `
+        <button class="btn btn-sm" style="border-color:#1976d2;color:#1976d2" onclick="reopenConfirmedRequest(${r.id},'${esc(r.email||'')}','${esc(r.contact_name||r.invoice_to||'')}','${esc(r.invoice_to||'')}')">📋 Opprett ordre</button>
         ` : ''}
         <button class="btn btn-sm btn-danger" onclick="deleteRequest(${r.id})">🗑️ Slett</button>
       </div>`;
@@ -4311,6 +4313,60 @@ async function confirmRequest(id, email, name, invoiceTo) {
       };
     }
     showAlert('Forespørsel bekreftet! Kontroller priser og klikk Lagre — e-post åpnes automatisk.');
+    ST.tab = 'ordre';
+    renderTab();
+  } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
+}
+
+async function reopenConfirmedRequest(id, email, name, invoiceTo) {
+  // Re-fills the order form from a confirmed (but unsaved) request without changing DB status
+  try {
+    const [r] = await sbGet(`order_requests?id=eq.${id}`);
+    if (!r) { showAlert('Kunne ikke hente forespørsel', 'error'); return; }
+    const items = Array.isArray(r.items) ? r.items : JSON.parse(r?.items||'[]');
+
+    ST._ordreEdit = null;
+    ST._ordreFormState = {
+      enhet:          r.invoice_to || '',
+      contact:        r.contact_name || '',
+      orgNr:          r.org_nr || '',
+      invoiceAddress: r.invoice_address || '',
+      invoiceRef:     r.invoice_ref || '',
+      email:          r.email || '',
+      deliveryType:   r.delivery_type || '',
+      date:           r.delivery_date || today(),
+      dateDisp:       fmtDate(r.delivery_date || today()),
+      time:           r.delivery_time || '',
+      location:       r.delivery_location || '',
+      people:         String(r.num_people || ''),
+      allergies:      r.allergies || '',
+      note:           r.note || ''
+    };
+    ST._ordreRows = items.map((i, idx) => {
+      const prod = ST.cafeProducts.find(p => p.name === i.name);
+      return {
+        id: Date.now() + idx,
+        product_name: i.name,
+        quantity: i.qty || 1,
+        unit_price: prod?.selling_price || 0,
+        total_price: (i.qty||1) * (prod?.selling_price||0)
+      };
+    });
+    ST.subTab.ordre = 'ny';
+
+    // Set up email to send after saving
+    if (email) {
+      ST._pendingConfirmEmail = {
+        email, name, invoiceTo,
+        delivery_date:     r?.delivery_date     || null,
+        delivery_time:     r?.delivery_time     || null,
+        delivery_type:     r?.delivery_type     || null,
+        delivery_location: r?.delivery_location || null,
+        allergies:         r?.allergies         || null,
+        note:              r?.note              || null
+      };
+    }
+    showAlert('Skjema fyllt ut fra forespørsel — kontroller priser og klikk Lagre.');
     ST.tab = 'ordre';
     renderTab();
   } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
