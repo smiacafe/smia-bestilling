@@ -2298,7 +2298,7 @@ async function openReceiptEdit(receiptId) {
       rows: (receipt.purchase_items || []).map(i => ({
         id: i.id, isNew: false,
         name: i.item_name, qty: String(i.quantity), unit: i.unit,
-        unitPrice: String(i.unit_price), total: i.total_price
+        unitPrice: String(i.unit_price), vatRate: 0, total: i.total_price
       }))
     };
     renderTab();
@@ -2310,9 +2310,18 @@ async function openReceiptEdit(receiptId) {
 function buildReceiptEditModal() {
   if (!ST._editReceipt) return '';
   const r = ST._editReceipt;
+  const showVat = r.supplier_type === 'ekstern';
   const units = ['stk','kg','liter','pakke','dl','pose','boks','g','ml'];
-  const rowsHtml = r.rows.map((row, idx) => `
-    <div style="display:grid;grid-template-columns:2fr 70px 90px 90px 70px 28px;gap:4px;align-items:center;padding:4px 0;border-bottom:1px solid var(--bg3)">
+  const vatOpts = row => [0,15,25].map(v =>
+    `<option value="${v}" ${(row.vatRate||0)===v?'selected':''}>${v===0?'—':v+'%'}</option>`
+  ).join('');
+
+  const gridCols = showVat ? '2fr 70px 90px 90px 50px 70px 28px' : '2fr 70px 90px 90px 70px 28px';
+
+  const rowsHtml = r.rows.map((row, idx) => {
+    const hasVat = showVat && (row.vatRate||0) > 0;
+    return `
+    <div style="display:grid;grid-template-columns:${gridCols};gap:4px;align-items:center;padding:4px 0;border-bottom:1px solid var(--bg3)">
       <div style="position:relative">
         <input id="er-name-${idx}" value="${esc(row.name)}" style="font-size:0.85rem;width:100%" autocomplete="off"
           oninput="showEditReceiptSugg(${idx},this.value)"
@@ -2325,12 +2334,14 @@ function buildReceiptEditModal() {
       <select id="er-unit-${idx}" style="font-size:0.85rem" onchange="updateEditReceiptRow(${idx},'unit',this.value)">
         ${units.map(u => `<option ${row.unit===u?'selected':''}>${u}</option>`).join('')}
       </select>
-      <input id="er-price-${idx}" type="text" inputmode="decimal" value="${esc(row.unitPrice)}" style="font-size:0.85rem;text-align:right" onchange="updateEditReceiptRow(${idx},'unitPrice',this.value);calcEditReceiptRow(${idx})">
-      <input type="text" inputmode="decimal" id="er-total-${idx}" value="${row.total > 0 ? fmtN(row.total) : ''}" placeholder="Total" style="font-size:0.82rem;text-align:right;background:var(--bg2);border-color:var(--bg3);color:var(--text2)" title="Skriv inn totalprisen — enhetspris beregnes automatisk" onchange="calcEditReceiptRowFromTotal(${idx},this.value)">
+      <input id="er-price-${idx}" type="text" inputmode="decimal" value="${esc(row.unitPrice)}" placeholder="${showVat?'Eks. MVA':''}" style="font-size:0.85rem;text-align:right" title="${showVat?'Enhetspris ekskl. MVA':''}" onchange="updateEditReceiptRow(${idx},'unitPrice',this.value);calcEditReceiptRow(${idx})">
+      ${showVat ? `<select id="er-vat-${idx}" title="MVA-sats" style="font-size:0.78rem;padding:3px 2px;${hasVat?'color:#1565c0;font-weight:700;border-color:#90caf9;background:#e3f2fd':''}" onchange="setEditReceiptVatRate(${idx},parseInt(this.value))">${vatOpts(row)}</select>` : ''}
+      <input type="text" inputmode="decimal" id="er-total-${idx}" value="${row.total > 0 ? fmtN(row.total) : ''}" placeholder="Total" style="font-size:0.82rem;text-align:right;${hasVat?'color:#1565c0;font-weight:600;background:#e3f2fd;border-color:#90caf9':'background:var(--bg2);border-color:var(--bg3);color:var(--text2)'}" title="${hasVat?'Totalbeløp inkl. MVA':'Skriv inn totalprisen — enhetspris beregnes automatisk'}" onchange="calcEditReceiptRowFromTotal(${idx},this.value)">
       <button onclick="removeEditReceiptRow(${idx})" style="background:none;border:none;cursor:pointer;color:var(--danger);font-size:14px">✕</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
-  const grandTotal = r.rows.reduce((s, row) => s + (parseFloat(String(row.unitPrice).replace(',','.')) || 0) * (parseFloat(String(row.qty).replace(',','.')) || 0), 0);
+  const grandTotal = r.rows.reduce((s, row) => s + (row.total || 0), 0);
 
   return `<div class="modal-bg" onclick="if(event.target===this)closeReceiptEdit()">
   <div class="modal" style="max-width:680px">
@@ -2343,18 +2354,19 @@ function buildReceiptEditModal() {
         <input value="${esc(r.supplier_name)}" onchange="ST._editReceipt.supplier_name=this.value">
       </div>
     </div>
-    <div style="display:grid;grid-template-columns:2fr 70px 90px 90px 70px 28px;gap:4px;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:4px">
+    <div style="display:grid;grid-template-columns:${gridCols};gap:4px;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:4px">
       <span class="section-label" style="margin:0">Vare</span>
       <span class="section-label" style="margin:0">Antall</span>
       <span class="section-label" style="margin:0">Enhet</span>
-      <span class="section-label" style="margin:0">Pris/enh</span>
-      <span class="section-label" style="margin:0;text-align:right" title="Skriv totalprisen her — enhetspris beregnes baklengs">Total ↕</span>
+      <span class="section-label" style="margin:0">${showVat?'Pris eks. MVA':'Pris/enh'}</span>
+      ${showVat ? `<span class="section-label" style="margin:0;text-align:center">MVA</span>` : ''}
+      <span class="section-label" style="margin:0;text-align:right">${showVat?'Total ink. ↕':'Total ↕'}</span>
       <span></span>
     </div>
     <div id="edit-receipt-rows">${rowsHtml}</div>
     <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center">
       <button class="btn btn-sm" onclick="addEditReceiptRow()">+ Legg til rad</button>
-      <span style="font-weight:700">${fmt(grandTotal)}</span>
+      <span style="font-weight:700">${showVat?'<span style="font-size:0.78rem;color:var(--text2);margin-right:6px">Totalt ink. MVA:</span>':''}${fmt(grandTotal)}</span>
     </div>
     <div id="edit-receipt-error" style="color:#c0392b;font-size:0.85rem;min-height:1.2em;margin-top:6px"></div>
     <div class="modal-footer">
@@ -2372,9 +2384,10 @@ function updateEditReceiptRow(idx, field, val) {
 function calcEditReceiptRow(idx) {
   const row = ST._editReceipt?.rows[idx];
   if (!row) return;
-  const qty = parseFloat(String(row.qty).replace(',', '.')) || 0;
-  const up  = parseFloat(String(row.unitPrice).replace(',', '.')) || 0;
-  row.total = qty * up;
+  const qty     = parseFloat(String(row.qty).replace(',', '.')) || 0;
+  const up      = parseFloat(String(row.unitPrice).replace(',', '.')) || 0;
+  const vatMult = 1 + (row.vatRate || 0) / 100;
+  row.total = qty * up * vatMult;
   const totalEl = document.getElementById('er-total-' + idx);
   if (totalEl) totalEl.value = row.total > 0 ? fmtN(row.total) : '';
 }
@@ -2382,20 +2395,43 @@ function calcEditReceiptRow(idx) {
 function calcEditReceiptRowFromTotal(idx, totalVal) {
   const row = ST._editReceipt?.rows[idx];
   if (!row) return;
-  const total = parseFloat(String(totalVal).replace(',', '.')) || 0;
-  const qty   = parseFloat(String(row.qty).replace(',', '.')) || 0;
+  const total   = parseFloat(String(totalVal).replace(',', '.')) || 0;
+  const qty     = parseFloat(String(row.qty).replace(',', '.')) || 0;
+  const vatMult = 1 + (row.vatRate || 0) / 100;
   if (qty > 0 && total > 0) {
-    const unitPrice = total / qty;
-    row.unitPrice = String(unitPrice);
+    const unitPriceEx = total / qty / vatMult;
+    row.unitPrice = String(unitPriceEx);
     row.total = total;
     const priceEl = document.getElementById('er-price-' + idx);
-    if (priceEl) priceEl.value = fmtN(unitPrice);
+    if (priceEl) priceEl.value = fmtN(unitPriceEx);
   }
+}
+
+function setEditReceiptVatRate(idx, rate) {
+  const row = ST._editReceipt?.rows[idx];
+  if (!row) return;
+  row.vatRate = rate || 0;
+  const hasVat = row.vatRate > 0;
+  const totalEl = document.getElementById('er-total-' + idx);
+  const vatEl   = document.getElementById('er-vat-'   + idx);
+  if (totalEl) {
+    totalEl.style.color       = hasVat ? '#1565c0' : 'var(--text2)';
+    totalEl.style.fontWeight  = hasVat ? '600' : '400';
+    totalEl.style.background  = hasVat ? '#e3f2fd' : 'var(--bg2)';
+    totalEl.style.borderColor = hasVat ? '#90caf9' : 'var(--bg3)';
+  }
+  if (vatEl) {
+    vatEl.style.color       = hasVat ? '#1565c0' : '';
+    vatEl.style.fontWeight  = hasVat ? '700' : '';
+    vatEl.style.background  = hasVat ? '#e3f2fd' : '';
+    vatEl.style.borderColor = hasVat ? '#90caf9' : '';
+  }
+  calcEditReceiptRow(idx);
 }
 
 function addEditReceiptRow() {
   if (!ST._editReceipt) return;
-  ST._editReceipt.rows.push({ isNew: true, name: '', qty: '', unit: 'stk', unitPrice: '', total: 0 });
+  ST._editReceipt.rows.push({ isNew: true, name: '', qty: '', unit: 'stk', unitPrice: '', vatRate: 0, total: 0 });
   renderTab();
 }
 
@@ -2474,9 +2510,7 @@ async function saveReceiptEdit() {
   const validRows = r.rows.filter(row => row.name.trim() && (parseFloat(String(row.qty).replace(',','.')) || 0) > 0);
   if (validRows.length === 0) { if (errEl) errEl.textContent = 'Minst én gyldig rad kreves'; return; }
 
-  const newTotal = validRows.reduce((s, row) => {
-    return s + (parseFloat(String(row.qty).replace(',','.')) || 0) * (parseFloat(String(row.unitPrice).replace(',','.')) || 0);
-  }, 0);
+  const newTotal = validRows.reduce((s, row) => s + (row.total || 0), 0);
 
   try {
     // Update receipt header
@@ -2494,8 +2528,11 @@ async function saveReceiptEdit() {
 
     const itemsToInsert = [];
     for (const row of validRows) {
-      const qty = parseFloat(String(row.qty).replace(',', '.')) || 0;
-      const up  = parseFloat(String(row.unitPrice).replace(',', '.')) || 0;
+      const qty     = parseFloat(String(row.qty).replace(',', '.')) || 0;
+      const upEx    = parseFloat(String(row.unitPrice).replace(',', '.')) || 0;
+      const vatMult = 1 + (row.vatRate || 0) / 100;
+      const upInc   = upEx * vatMult;
+      const rowTotal = row.total > 0 ? row.total : qty * upInc;
       let ing = ingMap[row.name.toLowerCase().trim()];
       itemsToInsert.push({
         receipt_id: r.id,
@@ -2503,8 +2540,8 @@ async function saveReceiptEdit() {
         item_name: row.name.trim(),
         quantity: qty,
         unit: row.unit,
-        unit_price: up,
-        total_price: qty * up
+        unit_price: upInc,
+        total_price: rowTotal
       });
     }
     await sbPost('purchase_items', itemsToInsert);
@@ -5726,13 +5763,12 @@ function initCharts() {
         data: {
           labels: cd.chartLabels,
           datasets: [
-            { label: 'Omsetning (kr)', data: cd.chartData, backgroundColor: '#6F4E37cc', borderColor: '#6F4E37', borderWidth: 1, borderRadius: 4, order: 2 },
-            { label: 'Trend', data: trendData, type: 'line', borderColor: '#e53935', borderWidth: 2, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0.3, order: 1 }
+            { label: 'Omsetning (kr)', data: cd.chartData, backgroundColor: '#2e7d32cc', borderColor: '#2e7d32', borderWidth: 1, borderRadius: 4 }
           ]
         },
         options: {
           responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { display: true, labels: { boxWidth: 14, font: { size: 11 } } } },
+          plugins: { legend: { display: false } },
           scales: { y: { beginAtZero: true, ticks: { callback: v => 'kr ' + v.toLocaleString('nb-NO') } } }
         }
       });
