@@ -830,27 +830,33 @@ async function buildAvfall() {
       calRows += '<td style="padding:4px"></td>';
     } else {
       const ds = `${cy}-${String(cm).padStart(2,'0')}-${String(calDay).padStart(2,'0')}`;
-      const hasData    = savedDateSet.has(ds);
-      const isPOS      = !hasData && posDateSet.has(ds);
-      const missingPOS = wasteDateSet.has(ds) && !allPosSet.has(ds); // only warn if waste_log entry exists (café was open)
+      const hasData    = wasteDateSet.has(ds);                                          // green ✓ only when daily report (waste_log) saved
+      const hasProd    = !hasData && savedDateSet.has(ds);                              // production_log only — canteen delivery, no report
+      const isPOS      = !hasData && !hasProd && posDateSet.has(ds);                   // POS imported but no report yet
+      const missingPOS = hasData && !allPosSet.has(ds);                                // report saved but no POS upload
       const isSel   = logDate === ds;
       const isToday = ds === today();
       // Background always reflects data status — selection/today shown via border ring only
-      const bg  = hasData ? '#e8f5e9' : isPOS ? '#ede7f6' : 'transparent';
-      const col = hasData ? '#1b5e20' : isPOS ? '#6a1b9a' : isToday ? '#1565c0' : '#bbb';
+      const bg  = hasData ? '#e8f5e9' : isPOS ? '#ede7f6' : hasProd ? '#f3f3f3' : 'transparent';
+      const col = hasData ? '#1b5e20' : isPOS ? '#6a1b9a' : hasProd ? '#999' : isToday ? '#1565c0' : '#bbb';
       const border = isSel ? '3px solid #2e7d32'        // selected → green ring
                    : isToday ? '3px solid #1565c0'       // today    → blue ring
                    : '2px solid transparent';
+      const titleTxt = hasData  ? fmtDate(ds)+(missingPOS ? ': Rapport lagret – POS ikke lastet opp' : ': Rapport lagret')
+                     : isPOS    ? fmtDate(ds)+': POS-data, mangler daglig rapport'
+                     : hasProd  ? fmtDate(ds)+': Kantineleveranse registrert'
+                     : fmtDate(ds);
       // Every day is clickable (so staff can enter data for any date)
       calRows += `<td onclick="ST._wasteState={_date:'${ds}'};ST._scrollToRapport=true;renderTab()"
         style="text-align:center;padding:5px 2px;border-radius:7px;cursor:pointer;
                background:${bg};color:${col};font-weight:${hasData||isToday||isPOS||isSel?'700':'400'};
                border:${border};box-sizing:border-box"
-        title="${hasData ? fmtDate(ds)+(missingPOS ? ': Rapport lagret – POS ikke lastet opp' : ': Rapport lagret') : isPOS ? fmtDate(ds)+': POS-data, mangler daglig rapport' : fmtDate(ds)}">
+        title="${titleTxt}">
         <div style="font-size:0.9rem">${calDay}</div>
-        ${hasData ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>${missingPOS ? `<div style="font-size:0.52rem;background:#ede7f6;color:#6a1b9a;border-radius:2px;padding:0 2px;margin-top:1px;font-weight:700;line-height:1.4">POS</div>` : ''}`
-                  : isPOS ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.9">POS</div>`
-                  : '<div style="font-size:0.62rem">&nbsp;</div>'}
+        ${hasData  ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.85">✓</div>${missingPOS ? `<div style="font-size:0.52rem;background:#ede7f6;color:#6a1b9a;border-radius:2px;padding:0 2px;margin-top:1px;font-weight:700;line-height:1.4">POS</div>` : ''}`
+         : isPOS   ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.9">POS</div>`
+         : hasProd ? `<div style="font-size:0.62rem;margin-top:1px;opacity:0.7">📦</div>`
+         : '<div style="font-size:0.62rem">&nbsp;</div>'}
       </td>`;
       calDay++;
     }
