@@ -287,7 +287,8 @@ tr.unmatched td { background: #fff8e6; }
 
 /* LINE ITEMS */
 .line-item-row { display: grid; gap: 6px; align-items: center; margin-bottom: 6px; }
-.line-item-row.purchase-row { grid-template-columns: 2fr 80px 90px 90px 56px 80px 32px; }
+.line-item-row.purchase-row         { grid-template-columns: 2fr 80px 90px 90px 56px 80px 32px; }
+.line-item-row.purchase-row.no-vat  { grid-template-columns: 2fr 80px 90px 80px 80px 32px; }
 .line-item-row.order-row { grid-template-columns: 2fr 70px 90px 80px 32px; }
 
 /* CHARTS */
@@ -352,7 +353,8 @@ tr.unmatched td { background: #fff8e6; }
   table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
   /* Forms */
-  .line-item-row.purchase-row { grid-template-columns: 1fr 50px 60px 65px 40px 55px 28px; font-size: 12px; }
+  .line-item-row.purchase-row         { grid-template-columns: 1fr 50px 60px 65px 40px 55px 28px; font-size: 12px; }
+  .line-item-row.purchase-row.no-vat  { grid-template-columns: 1fr 55px 65px 65px 55px 28px; font-size: 12px; }
   .line-item-row.order-row    { grid-template-columns: 1fr 55px 75px 65px 28px; font-size: 12px; }
   .waste-row { grid-template-columns: 1fr 80px; grid-template-rows: auto auto; }
   .waste-row .toggle-group { grid-column: 1 / -1; }
@@ -1325,6 +1327,7 @@ async function buildInnkjop() {
 }
 
 function buildInnkjopForm(supplierType) {
+  const showVat = supplierType === 'ekstern';
   const rows = ST._purchaseRows || [{ id: Date.now(), name:'', qty:'', unit:'stk', unitPrice:'', vatRate:0, total:0 }];
   if (!ST._purchaseRows) ST._purchaseRows = rows;
 
@@ -1333,9 +1336,9 @@ function buildInnkjopForm(supplierType) {
   ).join('');
 
   const rowsHtml = rows.map((r,i) => {
-    const hasVat = (r.vatRate||0) > 0;
+    const hasVat = showVat && (r.vatRate||0) > 0;
     return `
-    <div class="line-item-row purchase-row" id="pr-${r.id}" style="position:relative">
+    <div class="line-item-row purchase-row${showVat?'':' no-vat'}" id="pr-${r.id}" style="position:relative">
       <div style="position:relative">
         <input type="text" placeholder="Varenavn" value="${esc(r.name)}"
           id="pr-name-${r.id}"
@@ -1349,46 +1352,49 @@ function buildInnkjopForm(supplierType) {
       <select id="pr-unit-${r.id}" onchange="updatePurchaseRow(${r.id},'unit',this.value)">
         ${['stk','kg','liter','pakke','dl','pose','boks','g','ml'].map(u => `<option ${r.unit===u?'selected':''}>${u}</option>`).join('')}
       </select>
-      <input type="text" inputmode="decimal" placeholder="Pris eks. MVA" value="${esc(String(r.unitPrice))}" id="pr-price-${r.id}" style="text-align:right" title="Enhetspris ekskl. MVA" onchange="updatePurchaseRow(${r.id},'unitPrice',this.value);calcPurchaseRow(${r.id})">
-      <select id="pr-vat-${r.id}" title="MVA-sats" style="font-size:0.8rem;padding:4px 2px;${hasVat?'color:#1565c0;font-weight:700;border-color:#90caf9;background:#e3f2fd':''}" onchange="setVatRate(${r.id},parseInt(this.value))">
-        ${vatOpts(r)}
-      </select>
+      <input type="text" inputmode="decimal" placeholder="${showVat?'Pris eks. MVA':'Enhetspris'}" value="${esc(String(r.unitPrice))}" id="pr-price-${r.id}" style="text-align:right" title="${showVat?'Enhetspris ekskl. MVA':'Enhetspris'}" onchange="updatePurchaseRow(${r.id},'unitPrice',this.value);calcPurchaseRow(${r.id})">
+      ${showVat ? `<select id="pr-vat-${r.id}" title="MVA-sats" style="font-size:0.8rem;padding:4px 2px;${hasVat?'color:#1565c0;font-weight:700;border-color:#90caf9;background:#e3f2fd':''}" onchange="setVatRate(${r.id},parseInt(this.value))">${vatOpts(r)}</select>` : ''}
       <input type="text" inputmode="decimal" id="pr-total-${r.id}" value="${r.total > 0 ? fmtN(r.total) : ''}" placeholder="Total" style="font-size:13px;text-align:right;${hasVat?'color:#1565c0;font-weight:600;background:#e3f2fd;border-color:#90caf9':'background:var(--bg2);border-color:var(--bg3);color:var(--text2)'}" title="${hasVat?'Totalbeløp inkl. MVA — tast inn eks-MVA total for å beregne enhetspris':'Skriv inn totalprisen — enhetspris beregnes automatisk'}" onchange="calcPurchaseRowFromTotal(${r.id},this.value)">
       <button class="btn btn-sm btn-danger btn-icon" onclick="removePurchaseRow(${r.id})">✕</button>
     </div>`;
   }).join('');
 
   const total = rows.reduce((s,r) => s + (r.total||0), 0);
-  const supplierExtra = supplierType === 'ekstern' ? `
+  const supplierExtra = showVat ? `
     <div class="form-row" style="margin-bottom:12px">
       <label>Leverandørnavn</label>
       <input type="text" id="purchase-supplier-name" placeholder="Navn på leverandør" value="${esc(ST._purchaseSupplierName||'')}">
     </div>` : '';
 
+  const gridCols      = showVat ? '2fr 80px 90px 90px 56px 80px 32px' : '2fr 80px 90px 80px 80px 32px';
+  const priceHeader   = showVat ? 'Pris eks. MVA' : 'Pris/enh';
+  const totalHeader   = showVat ? 'Total ink. ↕' : 'Total ↕';
+  const totalLabel    = showVat ? '<span style="font-size:0.78rem;color:var(--text2);margin-right:8px">Totalt ink. MVA:</span>' : '';
+
   return `
   ${buildImportModal()}
   <div class="card">
     <div class="card-header">
-      <span class="card-title">${supplierType === 'ekstern' ? '🏪 Ekstern innkjøp' : '🛒 Supermarked innkjøp'}</span>
+      <span class="card-title">${showVat ? '🏪 Ekstern innkjøp' : '🛒 Supermarked innkjøp'}</span>
       <div class="spacer"></div>
       <button class="btn btn-sm" style="border-color:#4a90d9;color:#4a90d9" onclick="openImportModal('${supplierType}')">📥 Importer fra fil</button>
       ${mkDatePicker('purchase-date', ST._purchaseDate || today(), 'ST._purchaseDate=this.value;', 'width:160px')}
     </div>
     ${supplierExtra}
-    <div style="display:grid;grid-template-columns:2fr 80px 90px 90px 56px 80px 32px;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:6px">
+    <div style="display:grid;grid-template-columns:${gridCols};gap:6px;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:6px">
       <span class="section-label" style="margin:0;padding:0 2px">Vare</span>
       <span class="section-label" style="margin:0">Antall</span>
       <span class="section-label" style="margin:0">Enhet</span>
-      <span class="section-label" style="margin:0">Pris eks. MVA</span>
-      <span class="section-label" style="margin:0;text-align:center" title="MVA-sats per vare">MVA</span>
-      <span class="section-label" style="margin:0;text-align:right" title="Total inkl. MVA — eller skriv inn for å beregne baklengs">Total ink. ↕</span>
+      <span class="section-label" style="margin:0">${priceHeader}</span>
+      ${showVat ? `<span class="section-label" style="margin:0;text-align:center" title="MVA-sats per vare">MVA</span>` : ''}
+      <span class="section-label" style="margin:0;text-align:right" title="Skriv totalprisen her — enhetspris beregnes baklengs">${totalHeader}</span>
       <span></span>
     </div>
     <div id="purchase-rows">${rowsHtml}</div>
     <div class="row" style="margin-top:10px">
       <button class="btn btn-sm" onclick="addPurchaseRow()">+ Legg til rad</button>
       <div class="spacer"></div>
-      <span style="font-size:0.78rem;color:var(--text2);margin-right:8px">Totalt ink. MVA:</span>
+      ${totalLabel}
       <span id="purchase-grand-total" style="font-weight:700;font-size:15px">${fmt(total)}</span>
     </div>
     <div style="margin-top:1rem;display:flex;gap:8px;align-items:center">
