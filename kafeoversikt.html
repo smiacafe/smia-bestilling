@@ -4298,40 +4298,19 @@ async function confirmRequest(id, email, name, invoiceTo) {
     });
     ST.subTab.ordre = 'ny';
 
+    // Store email details — will be sent after admin reviews and saves the order
     if (email) {
-      let itemLines = '';
-      let total = 0;
-      items.forEach(i => {
-        const prod = ST.cafeProducts.find(p => p.name === i.name);
-        const lineTotal = (prod?.selling_price || 0) * (i.qty || 1);
-        total += lineTotal;
-        itemLines += `\n  - ${i.name} × ${i.qty}${prod?.selling_price ? '  (kr ' + fmtN(lineTotal) + ')' : ''}`;
-      });
-
-      const deliveryLine = r?.delivery_date
-        ? `\nDato: ${fmtDate(r.delivery_date)}${r.delivery_time ? ' kl. ' + r.delivery_time : ''}`
-        : '';
-      const deliveryType = r?.delivery_type === 'serveres' ? 'Serveres i bygget' : r?.delivery_type === 'hentes' ? 'Hentes i kafeen' : '';
-      const locationLine = r?.delivery_location ? `\nLeveringssted: ${r.delivery_location}` : '';
-      const totalLine = total > 0 ? `\nTotalt: kr ${fmtN(total)} (inkl. MVA)` : '';
-      const allergyLine = r?.allergies ? `\nAllergier/merknader: ${r.allergies}` : '';
-      const noteLine = r?.note ? `\nNotat: ${r.note}` : '';
-
-      const subject = encodeURIComponent('Bestillingsforespørsel bekreftet – SMIA Kafé');
-      const body = encodeURIComponent(
-        `Hei${name ? ' ' + name : ''},\n\n` +
-        `Vi bekrefter bestillingsforespørselen fra ${invoiceTo || 'dere'}.\n\n` +
-        `── BESTILLINGSDETALJER ──${itemLines}${totalLine}\n` +
-        `${deliveryLine}${locationLine}${deliveryType ? '\nLeveringsmåte: ' + deliveryType : ''}` +
-        `${allergyLine}${noteLine}\n\n` +
-        `VIKTIG: AVBESTILLING MÅ SKJE SENEST 48 TIMER FØR LEVERINGSTIDSPUNKTET.\n\n` +
-        `Merk: Prisene i denne bekreftelsen er veiledende og kan endres med forbehold til spesialkost og eventuelle tilpasninger.\n\n` +
-        `Ta gjerne kontakt med oss dersom du har spørsmål.\n\n` +
-        `Med vennlig hilsen,\nSMIA Kafé\nVennesla Voksenopplæring`
-      );
-      window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+      ST._pendingConfirmEmail = {
+        email, name, invoiceTo,
+        delivery_date:     r?.delivery_date     || null,
+        delivery_time:     r?.delivery_time     || null,
+        delivery_type:     r?.delivery_type     || null,
+        delivery_location: r?.delivery_location || null,
+        allergies:         r?.allergies         || null,
+        note:              r?.note              || null
+      };
     }
-    showAlert('Forespørsel bekreftet! Fyll inn ordre og klikk Lagre.');
+    showAlert('Forespørsel bekreftet! Kontroller priser og klikk Lagre — e-post åpnes automatisk.');
     ST.tab = 'ordre';
     renderTab();
   } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
@@ -4713,6 +4692,37 @@ async function saveOrdre(id) {
     ST._ordreFormState = null;
     ST.subTab.ordre = 'liste';
     showAlert('Ordre lagret!');
+
+    // If this save was triggered from a confirmed forespørsel, open the confirmation email now
+    if (ST._pendingConfirmEmail) {
+      const pc = ST._pendingConfirmEmail;
+      ST._pendingConfirmEmail = null;
+      let itemLines = '';
+      let total = 0;
+      rows.forEach(r => {
+        total += Number(r.total_price || 0);
+        itemLines += `\n  - ${r.product_name} × ${r.quantity}  (kr ${fmtN(r.total_price || 0)})`;
+      });
+      const deliveryLine  = pc.delivery_date ? `\nDato: ${fmtDate(pc.delivery_date)}${pc.delivery_time ? ' kl. ' + pc.delivery_time : ''}` : '';
+      const delivTypeText = pc.delivery_type === 'serveres' ? 'Serveres i bygget' : pc.delivery_type === 'hentes' ? 'Hentes i kafeen' : '';
+      const locationLine  = pc.delivery_location ? `\nLeveringssted: ${pc.delivery_location}` : '';
+      const totalLine     = total > 0 ? `\nTotalt: kr ${fmtN(total)} (inkl. MVA)` : '';
+      const allergyLine   = pc.allergies ? `\nAllergier/merknader: ${pc.allergies}` : '';
+      const noteLine      = pc.note ? `\nNotat: ${pc.note}` : '';
+      const subject = encodeURIComponent('Bestillingsforespørsel bekreftet – SMIA Kafé');
+      const body = encodeURIComponent(
+        `Hei${pc.name ? ' ' + pc.name : ''},\n\n` +
+        `Vi bekrefter bestillingsforespørselen fra ${pc.invoiceTo || 'dere'}.\n\n` +
+        `── BESTILLINGSDETALJER ──${itemLines}${totalLine}\n` +
+        `${deliveryLine}${locationLine}${delivTypeText ? '\nLeveringsmåte: ' + delivTypeText : ''}` +
+        `${allergyLine}${noteLine}\n\n` +
+        `VIKTIG: AVBESTILLING MÅ SKJE SENEST 48 TIMER FØR LEVERINGSTIDSPUNKTET.\n\n` +
+        `Ta gjerne kontakt med oss dersom du har spørsmål.\n\n` +
+        `Med vennlig hilsen,\nSMIA Kafé\nVennesla Voksenopplæring`
+      );
+      window.location.href = `mailto:${pc.email}?subject=${subject}&body=${body}`;
+    }
+
     await renderTab();
   } catch(e) {
     showAlert('Feil: ' + e.message, 'error');
