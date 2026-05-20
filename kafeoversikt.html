@@ -96,6 +96,7 @@ create table private_orders (
   created_at timestamptz default now()
 );
 -- Run these if the table already exists:
+-- ALTER TABLE production_log ADD COLUMN IF NOT EXISTS source text default 'manual';
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS invoice_to text;
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS contact_name text;
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS org_nr text;
@@ -782,11 +783,16 @@ async function buildAvfall() {
     try {
       const [wD, pD] = await Promise.all([
         sbGet('waste_log?select=log_date&order=log_date.desc&limit=1000'),
-        sbGet('production_log?select=log_date&order=log_date.desc&limit=1000')
+        sbGet('production_log?select=log_date,source&order=log_date.desc&limit=1000')
       ]);
-      const wasteSet = new Set(wD.map(r => r.log_date));
-      const dateSet  = new Set([...wasteSet, ...pD.map(r => r.log_date)]);
-      wasteDates = [...wasteSet].sort().reverse();
+      const wasteSet      = new Set(wD.map(r => r.log_date));
+      // Manual production entries (source='manual' or null/missing = legacy daily-report rows)
+      const manualProdSet = new Set(pD.filter(r => r.source !== 'kantine').map(r => r.log_date));
+      // Union of all dates for savedDateSet (drives 📦 check)
+      const dateSet       = new Set([...wasteSet, ...pD.map(r => r.log_date)]);
+      // "Reported" dates = waste_log OR manually-entered production (drives green ✓)
+      const reportedSet   = new Set([...wasteSet, ...manualProdSet]);
+      wasteDates = [...reportedSet].sort().reverse();
       savedDates = [...dateSet].sort().reverse();
       ST._wasteDatesCache = wasteDates;
       ST._savedDatesCache = savedDates;
@@ -1062,7 +1068,7 @@ async function saveDagligRapport() {
     const prod  = parseFloat(ST._wasteState['wp_' + p.id]) || 0;
     const svinn = parseFloat(ST._wasteState['wk_' + p.id]) || 0;
     const g2g   = parseFloat(ST._wasteState['wg_' + p.id]) || 0;
-    if (prod  > 0) prodRows.push({ log_date: logDate, cafe_product_id: p.id, product_name: p.name, quantity_produced: prod });
+    if (prod  > 0) prodRows.push({ log_date: logDate, cafe_product_id: p.id, product_name: p.name, quantity_produced: prod, source: 'manual' });
     if (svinn > 0) wasteRows.push({ log_date: logDate, cafe_product_id: p.id, product_name: p.name, quantity: svinn, waste_type: 'kassert' });
     if (g2g   > 0) wasteRows.push({ log_date: logDate, cafe_product_id: p.id, product_name: p.name, quantity: g2g,   waste_type: '2good2go' });
   }
@@ -2032,7 +2038,8 @@ async function importKantineOrder(orderId) {
                   cafe_product_id: prod.id,
                   product_name: prod.name,
                   quantity_produced: produced,
-                  log_date: deliveryDate
+                  log_date: deliveryDate,
+                  source: 'kantine'
                 });
               }
             }
