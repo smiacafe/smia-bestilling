@@ -5210,18 +5210,21 @@ async function buildInnsikt() {
     const totalUnits = sales.reduce((s,r) => s + r.units_sold, 0);
     const totalWaste = waste.reduce((s,r) => s + Number(r.quantity), 0);
 
+    // Revenue per sale row: units_sold × selling_price (fall back to 0 if product unknown)
+    const saleRevenue = r => r.units_sold * (cpMap[r.cafe_product_id]?.selling_price || 0);
+
     let chartLabels = [], chartData = [];
     if (chartMode === 'daily' && dateFrom && dateTo) {
       const cur = new Date(dateFrom), end = new Date(dateTo);
       while (cur <= end) {
         const d = cur.toISOString().slice(0,10);
         chartLabels.push(d.slice(5));
-        chartData.push(sales.filter(r => r.sale_date === d).reduce((s,r) => s + r.units_sold, 0));
+        chartData.push(sales.filter(r => r.sale_date === d).reduce((s,r) => s + saleRevenue(r), 0));
         cur.setDate(cur.getDate()+1);
       }
     } else {
       const monthly = {};
-      sales.forEach(r => { const m = r.sale_date.slice(0,7); monthly[m] = (monthly[m]||0) + r.units_sold; });
+      sales.forEach(r => { const m = r.sale_date.slice(0,7); monthly[m] = (monthly[m]||0) + saleRevenue(r); });
       const months = Object.keys(monthly).sort();
       chartLabels = months; chartData = months.map(m => monthly[m]);
     }
@@ -5301,7 +5304,7 @@ async function buildInnsikt() {
     </div>`}
     <div class="grid2">
       <div class="card">
-        <div class="card-header"><span class="card-title">Salg — ${esc(label)}</span></div>
+        <div class="card-header"><span class="card-title">Omsetning — ${esc(label)}</span></div>
         ${chartLabels.length===0?'<div class="empty">Ingen salgsdata</div>':'<div class="chart-wrap"><canvas id="chart-sales"></canvas></div>'}
       </div>
       <div class="card">
@@ -5709,10 +5712,29 @@ function initCharts() {
   if (cd.mode === 'oversikt') {
     const salesCtx = el('chart-sales');
     if (salesCtx && cd.chartLabels.length > 0) {
+      // Linear regression trend line
+      const _d = cd.chartData, _n = _d.length;
+      const _xM = (_n - 1) / 2;
+      const _yM = _d.reduce((s,v) => s+v, 0) / _n;
+      let _num = 0, _den = 0;
+      _d.forEach((y,x) => { _num += (x-_xM)*(y-_yM); _den += (x-_xM)**2; });
+      const _slope = _den ? _num/_den : 0, _int = _yM - _slope*_xM;
+      const trendData = _d.map((_,x) => Math.max(0, Math.round(_slope*x + _int)));
+
       ST.charts.sales = new Chart(salesCtx, {
         type: 'bar',
-        data: { labels: cd.chartLabels, datasets: [{ label: 'Enheter solgt', data: cd.chartData, backgroundColor: '#6F4E37cc', borderColor: '#6F4E37', borderWidth: 1, borderRadius: 4 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision:0 } } } }
+        data: {
+          labels: cd.chartLabels,
+          datasets: [
+            { label: 'Omsetning (kr)', data: cd.chartData, backgroundColor: '#6F4E37cc', borderColor: '#6F4E37', borderWidth: 1, borderRadius: 4, order: 2 },
+            { label: 'Trend', data: trendData, type: 'line', borderColor: '#e53935', borderWidth: 2, borderDash: [5,3], pointRadius: 0, fill: false, tension: 0.3, order: 1 }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: true, labels: { boxWidth: 14, font: { size: 11 } } } },
+          scales: { y: { beginAtZero: true, ticks: { callback: v => 'kr ' + v.toLocaleString('nb-NO') } } }
+        }
       });
     }
     const incomeCtx = el('chart-income');
