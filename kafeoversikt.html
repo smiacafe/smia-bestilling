@@ -1325,10 +1325,16 @@ async function buildInnkjop() {
 }
 
 function buildInnkjopForm(supplierType) {
-  const rows = ST._purchaseRows || [{ id: Date.now(), name:'', qty:'', unit:'stk', unitPrice:'', total:0 }];
+  const rows = ST._purchaseRows || [{ id: Date.now(), name:'', qty:'', unit:'stk', unitPrice:'', vatRate:0, total:0 }];
   if (!ST._purchaseRows) ST._purchaseRows = rows;
 
-  const rowsHtml = rows.map((r,i) => `
+  const vatOpts = r => [0,15,25].map(v =>
+    `<option value="${v}" ${(r.vatRate||0)===v?'selected':''}>${v===0?'—':v+'%'}</option>`
+  ).join('');
+
+  const rowsHtml = rows.map((r,i) => {
+    const hasVat = (r.vatRate||0) > 0;
+    return `
     <div class="line-item-row purchase-row" id="pr-${r.id}" style="position:relative">
       <div style="position:relative">
         <input type="text" placeholder="Varenavn" value="${esc(r.name)}"
@@ -1343,10 +1349,14 @@ function buildInnkjopForm(supplierType) {
       <select id="pr-unit-${r.id}" onchange="updatePurchaseRow(${r.id},'unit',this.value)">
         ${['stk','kg','liter','pakke','dl','pose','boks','g','ml'].map(u => `<option ${r.unit===u?'selected':''}>${u}</option>`).join('')}
       </select>
-      <input type="text" inputmode="decimal" placeholder="Enhetspris" value="${esc(String(r.unitPrice))}" id="pr-price-${r.id}" style="text-align:right" onchange="updatePurchaseRow(${r.id},'unitPrice',this.value);calcPurchaseRow(${r.id})">
-      <input type="text" inputmode="decimal" id="pr-total-${r.id}" value="${r.total > 0 ? fmtN(r.total) : ''}" placeholder="Total" style="font-size:13px;text-align:right;background:var(--bg2);border-color:var(--bg3);color:var(--text2)" title="Skriv inn totalprisen — enhetspris beregnes automatisk" onchange="calcPurchaseRowFromTotal(${r.id},this.value)">
+      <input type="text" inputmode="decimal" placeholder="Pris eks. MVA" value="${esc(String(r.unitPrice))}" id="pr-price-${r.id}" style="text-align:right" title="Enhetspris ekskl. MVA" onchange="updatePurchaseRow(${r.id},'unitPrice',this.value);calcPurchaseRow(${r.id})">
+      <select id="pr-vat-${r.id}" title="MVA-sats" style="font-size:0.8rem;padding:4px 2px;${hasVat?'color:#1565c0;font-weight:700;border-color:#90caf9;background:#e3f2fd':''}" onchange="setVatRate(${r.id},parseInt(this.value))">
+        ${vatOpts(r)}
+      </select>
+      <input type="text" inputmode="decimal" id="pr-total-${r.id}" value="${r.total > 0 ? fmtN(r.total) : ''}" placeholder="Total" style="font-size:13px;text-align:right;${hasVat?'color:#1565c0;font-weight:600;background:#e3f2fd;border-color:#90caf9':'background:var(--bg2);border-color:var(--bg3);color:var(--text2)'}" title="${hasVat?'Totalbeløp inkl. MVA — tast inn eks-MVA total for å beregne enhetspris':'Skriv inn totalprisen — enhetspris beregnes automatisk'}" onchange="calcPurchaseRowFromTotal(${r.id},this.value)">
       <button class="btn btn-sm btn-danger btn-icon" onclick="removePurchaseRow(${r.id})">✕</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   const total = rows.reduce((s,r) => s + (r.total||0), 0);
   const supplierExtra = supplierType === 'ekstern' ? `
@@ -1365,29 +1375,32 @@ function buildInnkjopForm(supplierType) {
       ${mkDatePicker('purchase-date', ST._purchaseDate || today(), 'ST._purchaseDate=this.value;', 'width:160px')}
     </div>
     ${supplierExtra}
-    <div style="display:grid;grid-template-columns:2fr 80px 90px 80px 80px 32px;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:6px">
+    <div style="display:grid;grid-template-columns:2fr 80px 90px 90px 56px 80px 32px;gap:6px;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:6px">
       <span class="section-label" style="margin:0;padding:0 2px">Vare</span>
       <span class="section-label" style="margin:0">Antall</span>
       <span class="section-label" style="margin:0">Enhet</span>
-      <span class="section-label" style="margin:0">Pris/enh</span>
-      <span class="section-label" style="margin:0;text-align:right" title="Skriv totalprisen her — enhetspris beregnes baklengs">Total ↕</span>
+      <span class="section-label" style="margin:0">Pris eks. MVA</span>
+      <span class="section-label" style="margin:0;text-align:center" title="MVA-sats per vare">MVA</span>
+      <span class="section-label" style="margin:0;text-align:right" title="Total inkl. MVA — eller skriv inn for å beregne baklengs">Total ink. ↕</span>
       <span></span>
     </div>
     <div id="purchase-rows">${rowsHtml}</div>
     <div class="row" style="margin-top:10px">
       <button class="btn btn-sm" onclick="addPurchaseRow()">+ Legg til rad</button>
       <div class="spacer"></div>
+      <span style="font-size:0.78rem;color:var(--text2);margin-right:8px">Totalt ink. MVA:</span>
       <span id="purchase-grand-total" style="font-weight:700;font-size:15px">${fmt(total)}</span>
     </div>
-    <div style="margin-top:1rem">
+    <div style="margin-top:1rem;display:flex;gap:8px;align-items:center">
       <button class="btn btn-primary" onclick="savePurchase('${supplierType}')">💾 Lagre kvittering</button>
+      ${rows.length > 1 || rows[0]?.name ? `<button class="btn btn-sm" style="border-color:#e53935;color:#e53935" onclick="if(confirm('Forkaste alle rader og starte på nytt?')){ST._purchaseRows=null;ST._purchaseSupplierName=null;ST._importModal=null;renderTab()}">🗑️ Forkast og start på nytt</button>` : ''}
     </div>
   </div>`;
 }
 
 function addPurchaseRow() {
   if (!ST._purchaseRows) ST._purchaseRows = [];
-  ST._purchaseRows.push({ id: Date.now(), name:'', qty:'', unit:'stk', unitPrice:'', total:0 });
+  ST._purchaseRows.push({ id: Date.now(), name:'', qty:'', unit:'stk', unitPrice:'', vatRate:0, total:0 });
   renderTab();
 }
 
@@ -1410,27 +1423,53 @@ function refreshPurchaseTotal() {
 function calcPurchaseRow(id) {
   const row = (ST._purchaseRows||[]).find(r => r.id === id);
   if (!row) return;
-  const qty = parseFloat(String(row.qty).replace(',', '.')) || 0;
-  const up  = parseFloat(String(row.unitPrice).replace(',', '.')) || 0;
-  row.total = qty * up;
+  const qty     = parseFloat(String(row.qty).replace(',', '.')) || 0;
+  const up      = parseFloat(String(row.unitPrice).replace(',', '.')) || 0;
+  const vatMult = 1 + (row.vatRate || 0) / 100;
+  row.total = qty * up * vatMult;
   const totalEl = document.getElementById('pr-total-' + id);
   if (totalEl) totalEl.value = row.total > 0 ? fmtN(row.total) : '';
   refreshPurchaseTotal();
 }
 
 function calcPurchaseRowFromTotal(id, totalVal) {
+  // User enters the inc-VAT total → back-calculate ex-VAT unit price
   const row = (ST._purchaseRows||[]).find(r => r.id === id);
   if (!row) return;
-  const total = parseFloat(String(totalVal).replace(',', '.')) || 0;
-  const qty   = parseFloat(String(row.qty).replace(',', '.')) || 0;
+  const total   = parseFloat(String(totalVal).replace(',', '.')) || 0;
+  const qty     = parseFloat(String(row.qty).replace(',', '.')) || 0;
+  const vatMult = 1 + (row.vatRate || 0) / 100;
   if (qty > 0 && total > 0) {
-    const unitPrice = total / qty;
-    row.unitPrice = String(unitPrice);
+    const unitPriceEx = total / qty / vatMult;  // ex-VAT unit price
+    row.unitPrice = String(unitPriceEx);
     row.total = total;
     const priceEl = document.getElementById('pr-price-' + id);
-    if (priceEl) priceEl.value = fmtN(unitPrice);
+    if (priceEl) priceEl.value = fmtN(unitPriceEx);
   }
   refreshPurchaseTotal();
+}
+
+function setVatRate(id, rate) {
+  const row = (ST._purchaseRows||[]).find(r => r.id === id);
+  if (!row) return;
+  row.vatRate = rate || 0;
+  // Re-style the total field immediately
+  const totalEl = document.getElementById('pr-total-' + id);
+  const vatEl   = document.getElementById('pr-vat-'   + id);
+  const hasVat  = row.vatRate > 0;
+  if (totalEl) {
+    totalEl.style.color       = hasVat ? '#1565c0' : 'var(--text2)';
+    totalEl.style.fontWeight  = hasVat ? '600' : '400';
+    totalEl.style.background  = hasVat ? '#e3f2fd' : 'var(--bg2)';
+    totalEl.style.borderColor = hasVat ? '#90caf9' : 'var(--bg3)';
+  }
+  if (vatEl) {
+    vatEl.style.color       = hasVat ? '#1565c0' : '';
+    vatEl.style.fontWeight  = hasVat ? '700' : '';
+    vatEl.style.background  = hasVat ? '#e3f2fd' : '';
+    vatEl.style.borderColor = hasVat ? '#90caf9' : '';
+  }
+  calcPurchaseRow(id);
 }
 
 // =============================================================
@@ -1527,11 +1566,12 @@ function confirmImport() {
     // Derive unitPrice from total if missing
     let up = unitPrice > 0 ? unitPrice : (qty > 0 && total > 0 ? total / qty : 0);
 
-    // Apply VAT multiplier if selected
-    const vatMult = 1 + (m.vatRate || 0) / 100;
-    if (vatMult > 1) { up = up * vatMult; total = total * vatMult; }
+    // VAT rate is stored on the row — prices stay as ex-VAT; total is recalculated inc-VAT
+    const vatRate = m.vatRate || 0;
+    const vatMult = 1 + vatRate / 100;
+    const incTotal = total > 0 ? total * vatMult : (up > 0 && qty > 0 ? up * qty * vatMult : 0);
 
-    newRows.push({ id: Date.now() + newRows.length, name, qty: qty > 0 ? String(qty) : '', unit, unitPrice: up > 0 ? String(up) : '', total });
+    newRows.push({ id: Date.now() + newRows.length, name, qty: qty > 0 ? String(qty) : '', unit, unitPrice: up > 0 ? String(up) : '', vatRate, total: incTotal });
   }
 
   if (newRows.length === 0) { showAlert('Ingen gyldige rader funnet — sjekk kolonnetilordningen', 'error'); return; }
@@ -1719,7 +1759,8 @@ async function savePurchase(supplierType) {
   const receiptDate = dateEl ? dateEl.value : today();
   const supplierNameEl = el('purchase-supplier-name');
   const supplierName = supplierNameEl ? supplierNameEl.value : null;
-  const total = validRows.reduce((s,r) => s + (parseFloat(r.qty)||0)*(parseFloat(r.unitPrice)||0), 0);
+  // Total is the sum of inc-VAT row totals
+  const total = validRows.reduce((s,r) => s + (r.total || 0), 0);
 
   try {
     const [receipt] = await sbPost('purchase_receipts', [{
@@ -1738,27 +1779,30 @@ async function savePurchase(supplierType) {
     const itemsToInsert = [];
     const updatedPrices = [];
     for (const r of validRows) {
-      const qty = parseFloat(r.qty);
-      const up  = parseFloat(r.unitPrice);
+      const qty     = parseFloat(r.qty);
+      const upEx    = parseFloat(r.unitPrice);                          // ex-VAT unit price
+      const vatMult = 1 + (r.vatRate || 0) / 100;
+      const upInc   = upEx * vatMult;                                   // inc-VAT unit price (what we actually pay)
+      const rowTotal = r.total > 0 ? r.total : qty * upInc;
       let ing = ingMap[r.name.toLowerCase()];
       if (!ing) {
-        // New ingredient — create it
+        // New ingredient — create it (store inc-VAT as purchase price)
         const [newIng] = await sbPost('ingredients', [{
           name: r.name, unit: r.unit, category: supplierType,
           purchase_unit: r.unit, recipe_unit: r.unit,
-          purchase_price: up, units_per_purchase: 1, cost_per_unit: up
+          purchase_price: upInc, units_per_purchase: 1, cost_per_unit: upInc
         }]);
         ing = newIng;
         ST.ingredients.push(newIng);
         ingMap[r.name.toLowerCase()] = newIng;
-      } else if (ing.purchase_price !== up || ing.cost_per_unit !== up) {
-        // Existing ingredient — update purchase price and recalculate cost per recipe unit
+      } else if (ing.purchase_price !== upInc || ing.cost_per_unit !== upInc) {
+        // Existing ingredient — update to inc-VAT purchase price
         const upp = parseFloat(ing.units_per_purchase) || 1;
-        const newCpp = upp > 0 ? up / upp : up;
-        await sbPatch(`ingredients?id=eq.${ing.id}`, { purchase_price: up, cost_per_unit: newCpp });
+        const newCpp = upp > 0 ? upInc / upp : upInc;
+        await sbPatch(`ingredients?id=eq.${ing.id}`, { purchase_price: upInc, cost_per_unit: newCpp });
         const oldPrice = ing.purchase_price || ing.cost_per_unit || 0;
-        if (oldPrice !== up) updatedPrices.push(`${ing.name}: ${fmt(oldPrice)} → ${fmt(up)}`);
-        ing.purchase_price = up;
+        if (oldPrice !== upInc) updatedPrices.push(`${ing.name}: ${fmt(oldPrice)} → ${fmt(upInc)}${r.vatRate>0?' (ink. '+r.vatRate+'% MVA)':''}`);
+        ing.purchase_price = upInc;
         ing.cost_per_unit  = newCpp;
       }
       itemsToInsert.push({
@@ -1767,8 +1811,8 @@ async function savePurchase(supplierType) {
         item_name: r.name,
         quantity: qty,
         unit: r.unit,
-        unit_price: up,
-        total_price: qty * up
+        unit_price: upInc,
+        total_price: rowTotal
       });
     }
 
