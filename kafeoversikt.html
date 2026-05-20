@@ -772,17 +772,21 @@ async function buildAvfall() {
   const logDate = ST._wasteState['_date'] || today();
 
   // ── 1. Fetch saved-dates + POS-dates for calendar (cached) ──────────────
-  let savedDates = [], posDates = [];
+  let savedDates = [], wasteDates = [], posDates = [];
   if (ST._savedDatesCache != null) {
     savedDates = ST._savedDatesCache;
+    wasteDates = ST._wasteDatesCache || [];
   } else {
     try {
       const [wD, pD] = await Promise.all([
         sbGet('waste_log?select=log_date&order=log_date.desc&limit=1000'),
         sbGet('production_log?select=log_date&order=log_date.desc&limit=1000')
       ]);
-      const dateSet = new Set([...wD.map(r => r.log_date), ...pD.map(r => r.log_date)]);
+      const wasteSet = new Set(wD.map(r => r.log_date));
+      const dateSet  = new Set([...wasteSet, ...pD.map(r => r.log_date)]);
+      wasteDates = [...wasteSet].sort().reverse();
       savedDates = [...dateSet].sort().reverse();
+      ST._wasteDatesCache = wasteDates;
       ST._savedDatesCache = savedDates;
     } catch(e) { ST._savedDatesCache = null; }
   }
@@ -807,6 +811,7 @@ async function buildAvfall() {
 
   // ── 2. Build calendar ────────────────────────────────────────────────────
   const savedDateSet = new Set(savedDates);
+  const wasteDateSet = new Set(wasteDates);  // only waste_log dates — used for missingPOS check
   const allPosSet    = new Set(posDates);
   const posDateSet   = new Set(posDates.filter(d => !savedDateSet.has(d)));
   const prevCM = cm === 1  ? `${cy-1}-12`                         : `${cy}-${String(cm-1).padStart(2,'0')}`;
@@ -825,7 +830,7 @@ async function buildAvfall() {
       const ds = `${cy}-${String(cm).padStart(2,'0')}-${String(calDay).padStart(2,'0')}`;
       const hasData    = savedDateSet.has(ds);
       const isPOS      = !hasData && posDateSet.has(ds);
-      const missingPOS = hasData && !allPosSet.has(ds);
+      const missingPOS = wasteDateSet.has(ds) && !allPosSet.has(ds); // only warn if waste_log entry exists (café was open)
       const isSel   = logDate === ds;
       const isToday = ds === today();
       // Background always reflects data status — selection/today shown via border ring only
@@ -1076,6 +1081,7 @@ async function saveDagligRapport() {
     if (!ST._savedDates) ST._savedDates = new Set();
     ST._savedDates.add(logDate);
     ST._savedDatesCache = null; // invalidate date cache
+    ST._wasteDatesCache = null;
     ST._posDatesMonthCache = null; // invalidate per-month POS date cache
     showAlert('Daglig rapport lagret!');
     await renderTab();
@@ -1490,6 +1496,13 @@ function updateImportCol(field, val) {
   }
 }
 
+function updateImportVat(val) {
+  if (ST._importModal) {
+    ST._importModal.vatRate = parseFloat(val) || 0;
+    renderTab();
+  }
+}
+
 function confirmImport() {
   const m = ST._importModal;
   if (!m || !m.dataRows) return;
@@ -1513,6 +1526,10 @@ function confirmImport() {
     let total = totalRaw > 0 ? totalRaw : (qty > 0 && unitPrice > 0 ? qty * unitPrice : 0);
     // Derive unitPrice from total if missing
     let up = unitPrice > 0 ? unitPrice : (qty > 0 && total > 0 ? total / qty : 0);
+
+    // Apply VAT multiplier if selected
+    const vatMult = 1 + (m.vatRate || 0) / 100;
+    if (vatMult > 1) { up = up * vatMult; total = total * vatMult; }
 
     newRows.push({ id: Date.now() + newRows.length, name, qty: qty > 0 ? String(qty) : '', unit, unitPrice: up > 0 ? String(up) : '', total });
   }
@@ -1542,15 +1559,24 @@ function buildImportModal() {
     </div>`;
   };
 
+  // VAT multiplier for preview
+  const vatMult  = 1 + (m.vatRate || 0) / 100;
+  const parseNum = v => parseFloat(String(v||'').replace(/\s/g,'').replace(',','.').replace(/[^0-9.\-]/g,'')) || 0;
+
   // Build preview rows using current colMap
   const previewRows = (m.dataRows||[]).slice(0, 12).map(row => {
-    const get = f => m.colMap?.[f] !== '' && m.colMap?.[f] !== undefined ? String(row[m.colMap[f]]||'').trim() : '—';
+    const get    = f => m.colMap?.[f] !== '' && m.colMap?.[f] !== undefined ? String(row[m.colMap[f]]||'').trim() : '—';
+    const rawUp  = m.colMap?.unitPrice !== '' && m.colMap?.unitPrice !== undefined ? parseNum(row[m.colMap.unitPrice]) : 0;
+    const rawTot = m.colMap?.total     !== '' && m.colMap?.total     !== undefined ? parseNum(row[m.colMap.total])     : 0;
+    const dispUp  = rawUp  > 0 ? fmtN(rawUp  * vatMult) : '—';
+    const dispTot = rawTot > 0 ? fmtN(rawTot * vatMult) : (rawUp > 0 && parseNum(get('qty')) > 0 ? fmtN(rawUp * vatMult * parseNum(get('qty'))) : '—');
+    const vatStyle = vatMult > 1 ? 'color:#1565c0;font-weight:600' : '';
     return `<tr style="font-size:0.83rem;border-bottom:1px solid var(--bg3)">
       <td style="padding:5px 6px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(get('name'))}</td>
       <td style="padding:5px 6px;text-align:right">${esc(get('qty'))}</td>
       <td style="padding:5px 6px">${esc(get('unit'))}</td>
-      <td style="padding:5px 6px;text-align:right">${esc(get('unitPrice'))}</td>
-      <td style="padding:5px 6px;text-align:right">${esc(get('total'))}</td>
+      <td style="padding:5px 6px;text-align:right;${vatStyle}">${dispUp}</td>
+      <td style="padding:5px 6px;text-align:right;${vatStyle}">${dispTot}</td>
     </tr>`;
   }).join('');
   const moreCount = (m.dataRows||[]).length - 12;
@@ -1565,14 +1591,26 @@ function buildImportModal() {
       <input type="file" accept=".xlsx,.xls,.csv,.ods" style="display:none" onchange="handleImportFile(event)">
     </label>`;
 
+  const vatRate = m.vatRate || 0;
+  const vatBtnStyle = r => `padding:5px 14px;border-radius:20px;border:1.5px solid ${vatRate===r?'var(--accent)':'var(--border)'};background:${vatRate===r?'var(--accent-light)':'var(--bg)'};color:${vatRate===r?'var(--accent)':'var(--text2)'};font-weight:${vatRate===r?'700':'400'};cursor:pointer;font-size:0.85rem;transition:all 0.15s`;
+
   const previewStep = `
     <p style="font-size:0.85rem;color:var(--text2);margin-bottom:12px">Tilordne kolonner fra filen (automatisk gjenkjent — juster om nødvendig):</p>
-    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;padding:12px;background:var(--bg2);border-radius:8px">
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;padding:12px;background:var(--bg2);border-radius:8px">
       ${colSelect('name','Varenavn *')}
       ${colSelect('qty','Antall')}
       ${colSelect('unit','Enhet')}
       ${colSelect('unitPrice','Enhetspris')}
       ${colSelect('total','Totalbeløp')}
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:10px 14px;background:${vatRate>0?'#e3f2fd':'var(--bg2)'};border:1.5px solid ${vatRate>0?'#90caf9':'var(--border)'};border-radius:8px;flex-wrap:wrap">
+      <span style="font-size:0.85rem;font-weight:600;color:var(--text)">🧾 MVA på prisene i filen:</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button style="${vatBtnStyle(0)}"  onclick="updateImportVat(0)">Ingen MVA</button>
+        <button style="${vatBtnStyle(15)}" onclick="updateImportVat(15)">15% (matvarer)</button>
+        <button style="${vatBtnStyle(25)}" onclick="updateImportVat(25)">25% (standard)</button>
+      </div>
+      ${vatRate > 0 ? `<span style="font-size:0.8rem;color:#1565c0;margin-left:4px">✦ Priser multipliseres med ${(1+vatRate/100).toFixed(2)} — blå tall viser inkl. MVA</span>` : `<span style="font-size:0.8rem;color:#aaa">Prisene lagres som de er</span>`}
     </div>
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px">
       <table style="width:100%;border-collapse:collapse;font-size:0.83rem">
@@ -1580,8 +1618,8 @@ function buildImportModal() {
           <th style="padding:7px 6px;text-align:left">Varenavn</th>
           <th style="padding:7px 6px;text-align:right">Antall</th>
           <th style="padding:7px 6px;text-align:left">Enhet</th>
-          <th style="padding:7px 6px;text-align:right">Enhetspris</th>
-          <th style="padding:7px 6px;text-align:right">Totalbeløp</th>
+          <th style="padding:7px 6px;text-align:right">Enhetspris${vatRate>0?' (ink. MVA)':''}</th>
+          <th style="padding:7px 6px;text-align:right">Totalbeløp${vatRate>0?' (ink. MVA)':''}</th>
         </tr></thead>
         <tbody>${previewRows}</tbody>
       </table>
@@ -2540,8 +2578,13 @@ function buildSalgPreview() {
 
   const canImport = needsMapping.length === 0 || allResolved;
 
+  const skipped = ST._salgSkipped || 0;
+
   return `
   <div style="margin-top:1rem">
+    ${skipped > 0 ? `<div style="font-size:0.82rem;color:#555;background:#f5f5f5;border:1px solid #ddd;border-radius:6px;padding:7px 12px;margin-bottom:10px">
+      🗑️ <strong>${skipped} rad${skipped===1?'':'er'}</strong> uten «SMIA»-prefiks ble automatisk filtrert bort og vises ikke her.
+    </div>` : ''}
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
       <span class="card-title">Forhåndsvisning (${data.length} rader)</span>
       ${needsMapping.length > 0 ? `<span class="badge" style="background:#fff3cd;color:#856404">⚠️ ${needsMapping.length} trenger kobling</span>` : `<span class="badge" style="background:#d4edda;color:#155724">✓ Alle matchet</span>`}
@@ -2571,6 +2614,7 @@ function cancelSalgImport() {
   ST._salgPending      = {};
   ST._salgPendingHusk  = {};
   ST._salgDateFromFile = false;
+  ST._salgSkipped      = 0;
   // Reset the file input so the same file can be re-selected later
   const fileInput = document.getElementById('salg-file');
   if (fileInput) fileInput.value = '';
@@ -2630,13 +2674,17 @@ function handleSalgFile(file) {
 
       ST._salgPending    = {};
       ST._salgPendingHusk = {};
-      ST._salgPreviewData = json.slice(1)
-        .filter(row => row[nameIdx])
-        .map(row => {
-          const name  = String(row[nameIdx]||'').trim();
-          const units = parseInt(row[unitsIdx]) || 0;
-          return { productName: name, unitsSold: units, autoMatch: matchPosName(name) };
-        });
+
+      const allDataRows = json.slice(1).filter(row => row[nameIdx]);
+      const smiaRows    = allDataRows.filter(row => String(row[nameIdx]||'').trim().toUpperCase().startsWith('SMIA'));
+      const skippedCount = allDataRows.length - smiaRows.length;
+      ST._salgSkipped = skippedCount;
+
+      ST._salgPreviewData = smiaRows.map(row => {
+        const name  = String(row[nameIdx]||'').trim();
+        const units = parseInt(row[unitsIdx]) || 0;
+        return { productName: name, unitsSold: units, autoMatch: matchPosName(name) };
+      });
 
       renderTab();
     } catch(err) {
@@ -2698,7 +2746,8 @@ async function importSalg() {
     ST._salgPending         = {};
     ST._salgPendingHusk     = {};
     ST._posDatesMonthCache  = null; // refresh calendar POS dots after import
-    ST._salgDateFromFile = false;
+    ST._salgDateFromFile    = false;
+    ST._salgSkipped         = 0;
     showAlert(`${rows.length} salgslinjer importert${newAliasCount > 0 ? ` · ${newAliasCount} ny(e) mappinger lagret` : ''}!`);
     await renderTab();
   } catch(e) {
@@ -5025,19 +5074,33 @@ async function buildInnsikt() {
   const nowY = new Date().getFullYear();
   const nowM = `${nowY}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
 
+  // Compute current ISO week value for the week picker default (format: YYYY-Www)
+  const _isoWeekVal = (() => {
+    if (period.mode === 'week' && period.value) return period.value;
+    const d = new Date(); d.setHours(0,0,0,0);
+    d.setDate(d.getDate() + 4 - (d.getDay()||7));
+    const y = d.getFullYear();
+    const wk = Math.ceil(((d - new Date(y,0,1)) / 86400000 + 1) / 7);
+    return `${y}-W${String(wk).padStart(2,'0')}`;
+  })();
+
   const periodBar = `
   <div class="card" style="margin-bottom:1rem">
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
       <span style="font-weight:600;color:var(--text2);font-size:0.85rem;margin-right:4px">Periode:</span>
       ${modeBtn('thisWeek','Denne uken')}
+      ${modeBtn('lastWeek','Forrige uke')}
       ${modeBtn('thisMonth','Denne måneden')}
       ${modeBtn('lastMonth','Forrige måned')}
       ${modeBtn('thisYear',String(nowY))}
       ${modeBtn('all','Totalt')}
       <span style="color:var(--border2);margin:0 4px">|</span>
-      <input type="month" value="${period.mode==='month'?period.value:nowM}" style="font-size:0.82rem;padding:4px 8px;width:150px"
+      <input type="week" value="${_isoWeekVal}" style="font-size:0.82rem;padding:4px 8px;width:165px;${period.mode==='week'?'outline:2px solid var(--accent);border-radius:4px':''}"
+        title="Velg en bestemt uke"
+        onchange="ST._innsiktPeriod={mode:'week',value:this.value};renderTab()">
+      <input type="month" value="${period.mode==='month'?period.value:nowM}" style="font-size:0.82rem;padding:4px 8px;width:150px;${period.mode==='month'?'outline:2px solid var(--accent);border-radius:4px':''}"
         onchange="ST._innsiktPeriod={mode:'month',value:this.value};renderTab()">
-      <input type="date" value="${period.mode==='day'?period.value:today()}" style="font-size:0.82rem;padding:4px 8px;width:150px"
+      <input type="date" value="${period.mode==='day'?period.value:today()}" style="font-size:0.82rem;padding:4px 8px;width:150px;${period.mode==='day'?'outline:2px solid var(--accent);border-radius:4px':''}"
         title="Velg én bestemt dag"
         onchange="ST._innsiktPeriod={mode:'day',value:this.value};renderTab()">
       <div class="spacer"></div>
