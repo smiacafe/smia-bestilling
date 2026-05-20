@@ -533,7 +533,7 @@ function mkDatePicker(id, isoVal, onchangeCode, extraStyle = '') {
     <input type="text" id="${dispId}" value="${esc(fmtDate(isoVal))}" placeholder="DD.MM.ÅÅÅÅ"
       style="width:130px;cursor:pointer;${extraStyle}" readonly
       onclick="document.getElementById('${id}').showPicker()">
-    <input type="date" id="${id}" value="${esc(isoVal||'')}"
+    <input type="date" id="${id}" value="${esc(isoVal||'')}" lang="nb-NO"
       style="position:absolute;opacity:0;width:0;height:0;pointer-events:none"
       onchange="document.getElementById('${dispId}').value=fmtDate(this.value);${onchangeCode}">
   </span>`;
@@ -1169,7 +1169,7 @@ async function buildDagligRapporter() {
   // ── Period control ───────────────────────────────────────────
   let periodInput = '';
   if (period === 'dag' || period === 'uke') {
-    periodInput = `<input type="date" value="${refDate}" onchange="ST._rapportDate=this.value;renderTab()" style="width:160px">`;
+    periodInput = `<input type="date" value="${refDate}" lang="nb-NO" onchange="ST._rapportDate=this.value;renderTab()" style="width:160px">`;
   } else if (period === 'maaned') {
     periodInput = `<input type="month" value="${refDate.slice(0,7)}" onchange="ST._rapportDate=this.value+'-01';renderTab()" style="width:160px">`;
   } else {
@@ -4670,7 +4670,7 @@ function buildOrdreForm() {
           <input type="text" id="ordre-date-display" value="${esc(existingDateDisp)}"
             placeholder="DD.MM.YYYY" style="width:120px" readonly
             onclick="document.getElementById('ordre-date').showPicker()">
-          <input type="date" id="ordre-date" value="${esc(existingDate)}"
+          <input type="date" id="ordre-date" value="${esc(existingDate)}" lang="nb-NO"
             style="position:absolute;opacity:0;width:0;height:0;pointer-events:none"
             onchange="document.getElementById('ordre-date-display').value=fmtDate(this.value)">
           <button type="button" style="padding:5px 8px;cursor:pointer;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--bg2)"
@@ -5158,12 +5158,12 @@ async function buildInnsikt() {
       ${modeBtn('thisYear',String(nowY))}
       ${modeBtn('all','Totalt')}
       <span style="color:var(--border2);margin:0 4px">|</span>
-      <input type="week" value="${_isoWeekVal}" style="font-size:0.82rem;padding:4px 8px;width:165px;${period.mode==='week'?'outline:2px solid var(--accent);border-radius:4px':''}"
+      <input type="week" value="${_isoWeekVal}" lang="nb-NO" style="font-size:0.82rem;padding:4px 8px;width:165px;${period.mode==='week'?'outline:2px solid var(--accent);border-radius:4px':''}"
         title="Velg en bestemt uke"
         onchange="ST._innsiktPeriod={mode:'week',value:this.value};renderTab()">
       <input type="month" value="${period.mode==='month'?period.value:nowM}" style="font-size:0.82rem;padding:4px 8px;width:150px;${period.mode==='month'?'outline:2px solid var(--accent);border-radius:4px':''}"
         onchange="ST._innsiktPeriod={mode:'month',value:this.value};renderTab()">
-      <input type="date" value="${period.mode==='day'?period.value:today()}" style="font-size:0.82rem;padding:4px 8px;width:150px;${period.mode==='day'?'outline:2px solid var(--accent);border-radius:4px':''}"
+      <input type="date" value="${period.mode==='day'?period.value:today()}" lang="nb-NO" style="font-size:0.82rem;padding:4px 8px;width:150px;${period.mode==='day'?'outline:2px solid var(--accent);border-radius:4px':''}"
         title="Velg én bestemt dag"
         onchange="ST._innsiktPeriod={mode:'day',value:this.value};renderTab()">
       <div class="spacer"></div>
