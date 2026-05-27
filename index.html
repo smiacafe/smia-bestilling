@@ -370,10 +370,15 @@
           <input type="date" id="delivery-date" lang="nb-NO" style="width:100%">
         </div>
         <div class="form-group">
-          <label id="time-label">Ønsket tidspunkt <span class="req">*</span></label>
+          <label id="time-label">Starttidspunkt <span class="req">*</span></label>
           <input type="time" id="delivery-time" style="width:100%">
           <p class="hint" id="time-hint">Når skal det være klart / serveres?</p>
         </div>
+      </div>
+      <div class="form-group" id="end-time-wrap">
+        <label>Sluttidspunkt <span class="req">*</span></label>
+        <input type="time" id="delivery-end-time" style="max-width:180px">
+        <p class="hint">Når er møtet / arrangementet ferdig? Vi trenger dette for å planlegge opprydding.</p>
       </div>
     </div>
 
@@ -665,6 +670,7 @@
     const deliveryLocation = document.getElementById('delivery-location')?.value.trim() || '';
     const deliveryDate     = document.getElementById('delivery-date').value.trim() || null;
     const deliveryTime     = document.getElementById('delivery-time').value;
+    const deliveryEndTime  = document.getElementById('delivery-end-time').value;
 
     if (!invoiceTo)                                    { showError('Vennligst fyll inn hvem fakturaen skal sendes til.'); return; }
     if (!invoiceAddress)                               { showError('Vennligst fyll inn fakturaadresse.'); return; }
@@ -675,7 +681,8 @@
     if (!deliveryType)                                        { showError('Vennligst velg leveringsmåte.'); return; }
     if (deliveryType === 'serveres' && !deliveryLocation)     { showError('Vennligst oppgi rom / sted for levering.'); return; }
     if (!deliveryDate)                                        { showError('Vennligst velg ønsket dato.'); return; }
-    if (!deliveryTime)                                        { showError('Vennligst oppgi ønsket tidspunkt.'); return; }
+    if (!deliveryTime)                                        { showError('Vennligst oppgi starttidspunkt.'); return; }
+    if (!isTable && !deliveryEndTime)                         { showError('Vennligst oppgi sluttidspunkt for arrangementet.'); return; }
 
     // Collect selected products (not needed for table bookings)
     const items = [];
@@ -708,6 +715,7 @@
         delivery_location: deliveryLocation || null,
         delivery_date:     deliveryDate,
         delivery_time:     deliveryTime,
+        delivery_end_time: deliveryEndTime || null,
         order_type:      isTable ? 'table' : 'standard',
         status:          'pending'
       });
@@ -724,7 +732,8 @@
           `E-post:      ${email}`,
           `Antall:      ${numPeople || '-'} pers.`,
           `Dato:        ${dateFormatted}`,
-          `Tidspunkt:   ${deliveryTime || '-'}`,
+          `Starttid:    ${deliveryTime || '-'}`,
+          `Sluttid:     ${deliveryEndTime || '-'}`,
           `Sted:        ${deliveryLocation || '-'}`,
           ``,
           `Produkter:`,
