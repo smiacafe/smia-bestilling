@@ -105,6 +105,7 @@ create table private_orders (
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS email text;
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS delivery_type text;
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS allergies text;
+-- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS end_time time;
 
 -- private_order_items: line items on private orders
 create table private_order_items (
@@ -4316,14 +4317,14 @@ async function buildOrdreListe() {
         <div style="flex:1;min-width:180px">
           <div style="font-weight:600">${esc(o.customer_name)}</div>
           <div style="font-size:12px;color:var(--text2)">
-            📅 ${fmtDate(o.order_date)}${o.order_time ? ' 🕐 ' + esc(o.order_time) : ''}
+            📅 ${fmtDate(o.order_date)}${o.order_time ? ' 🕐 ' + esc(o.order_time) : ''}${o.end_time ? '–' + esc(o.end_time) : ''}
             ${o.location ? ' · 📍 ' + esc(o.location) : ''}
             ${o.num_people ? ' · 👥 ' + o.num_people + ' pers.' : ''}
           </div>
         </div>
         ${isFuture ? '<span class="badge" style="background:#d0eaff;color:#185FA5">📅 Kommende</span>' : ''}
         <span class="badge badge-${o.status}">${statusLabel}</span>
-        <span style="font-weight:700">${fmt(total)}</span>
+        ${ST.role === 'admin' ? `<span style="font-weight:700">${fmt(total)}</span>` : ''}
         ${ST.role === 'admin' ? `<button class="btn btn-sm" onclick="editOrdre(${o.id})">✏️ Rediger</button>` : ''}
         ${ST.role === 'admin' ? actionBtn : ''}
         <button class="btn btn-sm" onclick="printStaffOrder(${o.id})" title="Personalark">📋 Personalark</button>
@@ -4665,6 +4666,7 @@ function buildOrdreForm() {
   const existingDate         = fs ? fs.date         : (e2.order_date || today());
   const existingDateDisp     = fs ? fs.dateDisp     : fmtDate(e2.order_date || today());
   const existingTime         = fs ? fs.time         : (e2.order_time || '');
+  const existingEndTime      = fs ? fs.endTime      : (e2.end_time  || '');
   const existingLocation     = fs ? fs.location     : (e2.location || '');
   const existingPeople       = fs ? fs.people       : String(e2.num_people || '');
   const existingAllergies    = fs ? fs.allergies    : (e2.allergies || '');
@@ -4723,7 +4725,19 @@ function buildOrdreForm() {
             onclick="document.getElementById('ordre-date').showPicker()">📅</button>
         </div>
       </div>
-      <div class="form-row"><label>Tidspunkt</label><input type="time" id="ordre-time" value="${esc(existingTime)}"></div>
+      <div class="form-row">
+        <label>Tidspunkt</label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div>
+            <div style="font-size:11px;color:var(--text2);margin-bottom:3px">Start</div>
+            <input type="time" id="ordre-time" value="${esc(existingTime)}" style="width:120px">
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--text2);margin-bottom:3px">Slutt <span style="font-weight:400;color:var(--text2)">(for opprydding)</span></div>
+            <input type="time" id="ordre-end-time" value="${esc(existingEndTime)}" style="width:120px">
+          </div>
+        </div>
+      </div>
     </div>
     <div class="form-row" style="max-width:200px"><label>Antall personer</label><input type="number" id="ordre-people" min="1" value="${esc(existingPeople)}" placeholder="f.eks. 12"></div>
 
@@ -4763,8 +4777,9 @@ function saveOrdreFormState() {
     deliveryType:   el('ordre-delivtype')?.value   ?? '',
     date:           el('ordre-date')?.value        || today(),
     dateDisp:       el('ordre-date-display')?.value || '',
-    time:           el('ordre-time')?.value        ?? '',
-    location:       el('ordre-location')?.value    ?? '',
+    time:           el('ordre-time')?.value         ?? '',
+    endTime:        el('ordre-end-time')?.value     ?? '',
+    location:       el('ordre-location')?.value     ?? '',
     people:         el('ordre-people')?.value      ?? '',
     allergies:      el('ordre-allergies')?.value   ?? '',
     note:           el('ordre-note')?.value        ?? ''
@@ -4869,6 +4884,7 @@ async function saveOrdre(id) {
   const delivery_type  = el('ordre-delivtype')?.value        || null;
   const date           = el('ordre-date')?.value             || today();
   const order_time     = el('ordre-time')?.value?.trim()     || null;
+  const end_time       = el('ordre-end-time')?.value?.trim() || null;
   const location       = el('ordre-location')?.value?.trim() || null;
   const num_people     = parseInt(el('ordre-people')?.value) || null;
   const allergies      = el('ordre-allergies')?.value?.trim() || null;
@@ -4889,7 +4905,7 @@ async function saveOrdre(id) {
     invoice_to:    enhet    || null,
     contact_name:  contact  || null,
     org_nr, invoice_address, invoice_ref, email, delivery_type,
-    order_date: date, order_time, location, num_people, allergies, note
+    order_date: date, order_time, end_time, location, num_people, allergies, note
   };
 
   try {
@@ -5043,7 +5059,8 @@ async function printStaffOrder(id) {
     el('print-area').innerHTML = `
     <div class="print-header"><h2>BESTILLING NR. ${order.id}</h2></div>
     <div class="print-meta" style="font-size:15px;line-height:2">
-      <strong>Dato:</strong> ${fmtDate(order.order_date)}${order.order_time ? ' — kl. ' + esc(order.order_time) : ''}<br>
+      <strong>Dato:</strong> ${fmtDate(order.order_date)}${order.order_time ? ' — kl. ' + esc(order.order_time) : ''}${order.end_time ? '–' + esc(order.end_time) : ''}<br>
+      ${order.end_time ? `<strong>Opprydding fra:</strong> kl. ${esc(order.end_time)}<br>` : ''}
       <strong>Sted:</strong> ${order.location ? esc(order.location) : '—'}<br>
       <strong>Antall personer:</strong> ${order.num_people || '—'}<br>
     </div>
