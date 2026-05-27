@@ -106,6 +106,7 @@ create table private_orders (
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS delivery_type text;
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS allergies text;
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS end_time time;
+-- ALTER TABLE order_requests ADD COLUMN IF NOT EXISTS delivery_end_time time;
 
 -- private_order_items: line items on private orders
 create table private_order_items (
@@ -4045,6 +4046,7 @@ async function buildBord() {
       </div>
       <div style="margin-top:8px;font-size:0.88rem;display:flex;flex-wrap:wrap;gap:14px;color:var(--text2)">
         ${r.delivery_date?`<span>📅 ${fmtDate(r.delivery_date)}${r.delivery_time?' kl. '+esc(r.delivery_time):''}</span>`:''}
+        ${r.delivery_end_time?`<span>🏁 Slutt kl. ${esc(r.delivery_end_time)}</span>`:''}
         ${r.num_people?`<span>👥 ${r.num_people} gjester</span>`:''}
         ${r.email?`<span>📧 ${esc(r.email)}</span>`:''}
       </div>
@@ -4394,6 +4396,7 @@ async function buildOrdreForesporsler() {
         ${r.email?`<span>📧 ${esc(r.email)}</span>`:''}
         ${r.num_people?`<span>👥 ${r.num_people} personer</span>`:''}
         ${r.delivery_date?`<span>📅 ${fmtDate(r.delivery_date)}${r.delivery_time?' kl. '+esc(r.delivery_time):''}</span>`:''}
+        ${r.delivery_end_time?`<span>🏁 Slutt kl. ${esc(r.delivery_end_time)}</span>`:''}
         ${r.delivery_location?`<span>📍 ${esc(r.delivery_location)}</span>`:r.delivery_type==='hentes'?`<span>📍 Hentes i kafeen</span>`:''}
       </div>
       ${itemsHtml}
