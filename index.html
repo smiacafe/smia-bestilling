@@ -375,7 +375,7 @@
           <p class="hint" id="time-hint">Når skal det være klart / serveres?</p>
         </div>
       </div>
-      <div class="form-group" id="end-time-wrap">
+      <div class="form-group" id="end-time-wrap" style="display:none">
         <label>Sluttidspunkt <span class="req">*</span></label>
         <input type="time" id="delivery-end-time" style="max-width:180px">
         <p class="hint">Når er møtet / arrangementet ferdig? Vi trenger dette for å planlegge opprydding.</p>
@@ -600,10 +600,19 @@
     const timeHint     = document.getElementById('time-hint');
     const timeLabel    = document.getElementById('time-label');
 
+    const endTimeWrap = document.getElementById('end-time-wrap');
+
     if (wrap) wrap.style.display = isServe ? 'block' : 'none';
     if (!isServe) {
       const loc = document.getElementById('delivery-location');
       if (loc) loc.value = '';
+    }
+    if (endTimeWrap) {
+      endTimeWrap.style.display = isServe ? 'block' : 'none';
+      if (!isServe) {
+        const et = document.getElementById('delivery-end-time');
+        if (et) et.value = '';
+      }
     }
     if (productsCard) productsCard.style.display = isTable ? 'none' : 'block';
     if (tableNote)    tableNote.style.display    = isTable ? 'block' : 'none';
@@ -612,7 +621,7 @@
       : 'Når skal det være klart / serveres?';
     if (timeLabel)    timeLabel.innerHTML = isTable
       ? 'Planlagt ankomsttid <span class="req">*</span>'
-      : 'Ønsket tidspunkt <span class="req">*</span>';
+      : 'Starttidspunkt <span class="req">*</span>';
   }
 
   // Auto-insert slashes as user types a date in dd/mm/yyyy format
@@ -682,7 +691,7 @@
     if (deliveryType === 'serveres' && !deliveryLocation)     { showError('Vennligst oppgi rom / sted for levering.'); return; }
     if (!deliveryDate)                                        { showError('Vennligst velg ønsket dato.'); return; }
     if (!deliveryTime)                                        { showError('Vennligst oppgi starttidspunkt.'); return; }
-    if (!isTable && !deliveryEndTime)                         { showError('Vennligst oppgi sluttidspunkt for arrangementet.'); return; }
+    if (deliveryType === 'serveres' && !deliveryEndTime)      { showError('Vennligst oppgi sluttidspunkt for arrangementet.'); return; }
 
     // Collect selected products (not needed for table bookings)
     const items = [];
