@@ -945,7 +945,7 @@ async function buildAvfall() {
         if (qty <= 0) return;
         if (item.cafe_product_id) ST._todaySales[item.cafe_product_id] = (ST._todaySales[item.cafe_product_id] || 0) + qty;
         if (item.product_name) ST._todaySales[item.product_name] = (ST._todaySales[item.product_name] || 0) + qty;
-        _bordSalesTotal += qty;
+        if (item.cafe_product_id) _bordSalesTotal += qty;
       });
     });
   } catch(e) {}
