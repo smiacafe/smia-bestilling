@@ -1888,7 +1888,11 @@ async function buildKantineSync() {
     <div class="card-header"><span class="card-title">🏢 Importer fra kantine</span></div>
     ${deliveredOrders.map(order => {
       const items   = Array.isArray(order.items) ? order.items : [];
-      const total   = items.reduce((s,i) => { const p = kpMap[i.pid]; return s + (p ? p.price * i.qty : 0); }, 0);
+      const rej     = order.rejected_items || {};
+      const effQty  = (i, idx) => i.splits?.length > 0
+        ? i.splits.reduce((s,sp,si) => rej[i.pid+'_'+si] ? s : s+Number(sp.qty||0), 0)
+        : (rej[String(i.pid)] ? 0 : Number(i.qty||0));
+      const total   = items.reduce((s,i) => { const p = kpMap[i.pid]; return s + (p ? p.price * effQty(i) : 0); }, 0);
       const synced  = syncedMap[order.id];
       // Default delivery date: today (not created_at, which is order placement date)
       const defaultDate = today();
@@ -1920,7 +1924,20 @@ async function buildKantineSync() {
             })()
           : ''}
         <table><thead><tr><th>Produkt</th><th>Antall</th><th>Pris</th></tr></thead><tbody>
-          ${items.map(i => { const p = kpMap[i.pid]; return p ? `<tr><td>${esc(p.name)}</td><td>${i.qty} ${esc(p.unit)}</td><td>${fmt(p.price*i.qty)}</td></tr>` : ''; }).join('')}
+          ${items.map(i => {
+            const p = kpMap[i.pid]; if (!p) return '';
+            if (i.splits?.length > 0) {
+              return i.splits.map((sp,si) => {
+                const key = i.pid+'_'+si;
+                const isRej = !!rej[key];
+                const style = isRej ? 'text-decoration:line-through;color:var(--text2);opacity:0.55' : '';
+                return `<tr style="${style}"><td>${esc(p.name)}${i.splits.length>1?' <span style="font-size:0.75rem;color:var(--text2)">(${esc(sp.day||'')})</span>':''}</td><td>${sp.qty} ${esc(p.unit)}</td><td>${isRej?'<s>':''} ${fmt(p.price*Number(sp.qty))}${isRej?'</s>':''}</td></tr>`;
+              }).join('');
+            }
+            const isRej = !!rej[String(i.pid)];
+            const style = isRej ? 'text-decoration:line-through;color:var(--text2);opacity:0.55' : '';
+            return `<tr style="${style}"><td>${esc(p.name)}</td><td>${i.qty} ${esc(p.unit)}</td><td>${isRej?'<s>':''} ${fmt(p.price*i.qty)}${isRej?'</s>':''}</td></tr>`;
+          }).join('')}
         </tbody></table>
       </div>`;
     }).join('')}
@@ -1979,8 +1996,15 @@ async function importKantineOrder(orderId) {
     const dateInput = document.getElementById(`sync-date-${orderId}`);
     const receiptDate = (dateInput && dateInput.value) ? dateInput.value : today();
 
-    const items = Array.isArray(order.items) ? order.items : [];
-    const total = items.reduce((s,i) => { const p = kpMap[i.pid]; return s + (p ? p.price*i.qty : 0); }, 0);
+    const items    = Array.isArray(order.items) ? order.items : [];
+    const rejItems = order.rejected_items || {};
+    // Compute effective quantity per item, excluding crossed-off splits or whole items
+    const getEffQty = i => {
+      if (i.splits?.length > 0)
+        return i.splits.reduce((s,sp,si) => rejItems[i.pid+'_'+si] ? s : s+Number(sp.qty||0), 0);
+      return rejItems[String(i.pid)] ? 0 : Number(i.qty||0);
+    };
+    const total = items.reduce((s,i) => { const p = kpMap[i.pid]; const q = getEffQty(i); return s + (p&&q>0 ? p.price*q : 0); }, 0);
 
     const [receipt] = await sbPost('purchase_receipts', [{
       receipt_date: receiptDate,
@@ -1998,6 +2022,8 @@ async function importKantineOrder(orderId) {
     for (const item of items) {
       const p = kpMap[item.pid];
       if (!p) continue;
+      const qty = getEffQty(item);
+      if (qty <= 0) continue; // fully crossed off — skip
       let ing = ingMap[p.name.toLowerCase()];
       if (!ing) {
         const ingUnit = p.unit || 'stk';
@@ -2010,10 +2036,10 @@ async function importKantineOrder(orderId) {
         receipt_id: receipt.id,
         ingredient_id: ing.id,
         item_name: p.name,
-        quantity: item.qty,
+        quantity: qty,
         unit: p.unit || 'stk',
         unit_price: p.price,
-        total_price: p.price * item.qty
+        total_price: p.price * qty
       });
     }
 
