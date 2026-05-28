@@ -972,9 +972,9 @@ async function buildAvfall() {
     ? `<div style="font-size:0.8rem;color:#856404;background:#fff9ee;border:1px solid #e6d5a0;border-radius:6px;padding:6px 10px;margin-bottom:6px">
         ⚠️ Ingen POS-salgsdata for denne datoen — «Solgt»-kolonnen viser kun bordbookinger.
        </div>` : '';
-  const bordNote = _bordSalesTotal > 0
+  const bordNote = _bordOrderCount > 0
     ? `<div style="font-size:0.8rem;color:#1565c0;background:#e3f2fd;border:1px solid #90caf9;border-radius:6px;padding:6px 10px;margin-bottom:6px">
-        📋 ${_bordSalesTotal} enhet fra bestilling er inkludert i «Solgt»-kolonnen.
+        📋 ${_bordOrderCount === 1 ? '1 bestilling' : _bordOrderCount + ' bestillinger'} er inkludert i «Solgt»-kolonnen.
        </div>` : '';
 
   const rows = products.length === 0
