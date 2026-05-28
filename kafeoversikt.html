@@ -1931,7 +1931,10 @@ async function buildKantineSync() {
                 const key = i.pid+'_'+si;
                 const isRej = !!rej[key];
                 const style = isRej ? 'text-decoration:line-through;color:var(--text2);opacity:0.55' : '';
-                return `<tr style="${style}"><td>${esc(p.name)}${i.splits.length>1?' <span style="font-size:0.75rem;color:var(--text2)">(${esc(sp.day||'')})</span>':''}</td><td>${sp.qty} ${esc(p.unit)}</td><td>${isRej?'<s>':''} ${fmt(p.price*Number(sp.qty))}${isRej?'</s>':''}</td></tr>`;
+                const daySpan = i.splits.length > 1 ? ` <span style="font-size:0.75rem;color:var(--text2)">(${esc(sp.day||'')})</span>` : '';
+                const strikeOpen = isRej ? '<s>' : '';
+                const strikeClose = isRej ? '</s>' : '';
+                return `<tr style="${style}"><td>${esc(p.name)}${daySpan}</td><td>${sp.qty} ${esc(p.unit)}</td><td>${strikeOpen}${fmt(p.price*Number(sp.qty))}${strikeClose}</td></tr>`;
               }).join('');
             }
             const isRej = !!rej[String(i.pid)];
