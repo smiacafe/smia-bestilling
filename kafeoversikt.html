@@ -6271,24 +6271,26 @@ async function printInnsiktRapport() {
 
   const marginCol = recipeMarginPct==null?'#555':recipeMarginPct>=60?'#1b5e20':recipeMarginPct>=40?'#e65100':'#b71c1c';
 
-  // ── Time series for line chart ──
+  // ── Time series for charts ──
   const { chartMode } = getInnsiktRange();
   const timeSeries = {};
   if (chartMode === 'daily' && dateFrom && dateTo) {
     const cur = new Date(dateFrom), end = new Date(dateTo);
-    while (cur <= end) { const d=cur.toISOString().slice(0,10); timeSeries[d]={rev:0,cost:0}; cur.setDate(cur.getDate()+1); }
-    sales.forEach(r => { const p=(r.cafe_product_id?cpMap[r.cafe_product_id]:null)||cpMap[r.product_name?.toLowerCase()]; if(timeSeries[r.sale_date]) timeSeries[r.sale_date].rev+=(p?(p.selling_price||0)*r.units_sold:0); });
-    privateOrders.forEach(o => { if(timeSeries[o.order_date]) timeSeries[o.order_date].rev+=(o.private_order_items||[]).reduce((s,i)=>s+Number(i.total_price||0),0); });
+    while (cur <= end) { const d=cur.toISOString().slice(0,10); timeSeries[d]={posRev:0,orderRev:0,cost:0}; cur.setDate(cur.getDate()+1); }
+    sales.forEach(r => { const p=(r.cafe_product_id?cpMap[r.cafe_product_id]:null)||cpMap[r.product_name?.toLowerCase()]; if(timeSeries[r.sale_date]) timeSeries[r.sale_date].posRev+=(p?(p.selling_price||0)*r.units_sold:0); });
+    privateOrders.forEach(o => { if(timeSeries[o.order_date]) timeSeries[o.order_date].orderRev+=(o.private_order_items||[]).reduce((s,i)=>s+Number(i.total_price||0),0); });
     purchases.forEach(r => { if(timeSeries[r.receipt_date]){ const it=(r.purchase_items||[]).reduce((a,i)=>{const b=Number(i.total_price||0);return a+(b>0?b:Number(i.unit_price||0)*Number(i.quantity||0));},0); timeSeries[r.receipt_date].cost+=Number(r.total_amount)>0?Number(r.total_amount):it; } });
   } else {
-    sales.forEach(r => { const m=r.sale_date.slice(0,7); const p=(r.cafe_product_id?cpMap[r.cafe_product_id]:null)||cpMap[r.product_name?.toLowerCase()]; if(!timeSeries[m])timeSeries[m]={rev:0,cost:0}; timeSeries[m].rev+=(p?(p.selling_price||0)*r.units_sold:0); });
-    privateOrders.forEach(o => { const m=o.order_date.slice(0,7); if(!timeSeries[m])timeSeries[m]={rev:0,cost:0}; timeSeries[m].rev+=(o.private_order_items||[]).reduce((s,i)=>s+Number(i.total_price||0),0); });
-    purchases.forEach(r => { const m=r.receipt_date.slice(0,7); if(!timeSeries[m])timeSeries[m]={rev:0,cost:0}; const it=(r.purchase_items||[]).reduce((a,i)=>{const b=Number(i.total_price||0);return a+(b>0?b:Number(i.unit_price||0)*Number(i.quantity||0));},0); timeSeries[m].cost+=Number(r.total_amount)>0?Number(r.total_amount):it; });
+    sales.forEach(r => { const m=r.sale_date.slice(0,7); const p=(r.cafe_product_id?cpMap[r.cafe_product_id]:null)||cpMap[r.product_name?.toLowerCase()]; if(!timeSeries[m])timeSeries[m]={posRev:0,orderRev:0,cost:0}; timeSeries[m].posRev+=(p?(p.selling_price||0)*r.units_sold:0); });
+    privateOrders.forEach(o => { const m=o.order_date.slice(0,7); if(!timeSeries[m])timeSeries[m]={posRev:0,orderRev:0,cost:0}; timeSeries[m].orderRev+=(o.private_order_items||[]).reduce((s,i)=>s+Number(i.total_price||0),0); });
+    purchases.forEach(r => { const m=r.receipt_date.slice(0,7); if(!timeSeries[m])timeSeries[m]={posRev:0,orderRev:0,cost:0}; const it=(r.purchase_items||[]).reduce((a,i)=>{const b=Number(i.total_price||0);return a+(b>0?b:Number(i.unit_price||0)*Number(i.quantity||0));},0); timeSeries[m].cost+=Number(r.total_amount)>0?Number(r.total_amount):it; });
   }
-  const tsKeys   = Object.keys(timeSeries).sort();
-  const tsLabels = tsKeys.map(k => chartMode==='daily' ? k.slice(5) : k);
-  const tsRev    = tsKeys.map(k => timeSeries[k].rev);
-  const tsCost   = tsKeys.map(k => timeSeries[k].cost);
+  const tsKeys     = Object.keys(timeSeries).sort();
+  const tsLabels   = tsKeys.map(k => chartMode==='daily' ? k.slice(5) : k);
+  const tsPosRev   = tsKeys.map(k => timeSeries[k].posRev);
+  const tsOrderRev = tsKeys.map(k => timeSeries[k].orderRev);
+  const tsRev      = tsKeys.map(k => timeSeries[k].posRev + timeSeries[k].orderRev);
+  const tsCost     = tsKeys.map(k => timeSeries[k].cost);
 
   // ── SVG line chart ──
   const svgLine = (labels, datasets, w=560, h=155) => {
@@ -6351,6 +6353,45 @@ async function printInnsiktRapport() {
     return s+'</svg>';
   };
 
+  // ── SVG bar chart ──
+  const svgBar = (labels, datasets, w=400, h=160) => {
+    if (!labels.length) return '';
+    const pL=52,pR=12,pT=12,pB=36, cW=w-pL-pR, cH=h-pT-pB;
+    const barStep = cW / labels.length;
+    const barW    = barStep * 0.72;
+    const stackedTotals = labels.map((_,i) => datasets.reduce((s,d) => s+(d.values[i]||0), 0));
+    const maxV = Math.max(...stackedTotals, 1) * 1.1;
+    const yp = v => pT + cH - (v/maxV)*cH;
+    const skip = Math.ceil(labels.length/10);
+    let s = `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg" style="display:block">`;
+    // grid
+    [0,0.25,0.5,0.75,1].forEach(f => {
+      const v=maxV*f, y=yp(v);
+      s+=`<line x1="${pL}" y1="${y}" x2="${pL+cW}" y2="${y}" stroke="${f===0?'#ccc':'#f0f0f0'}" stroke-width="1"/>`;
+      const lv=v>=1000?Math.round(v/1000)+'k':Math.round(v).toString();
+      s+=`<text x="${pL-3}" y="${y+3}" text-anchor="end" font-size="8" fill="#aaa">${lv}</text>`;
+    });
+    // bars
+    labels.forEach((lbl,i) => {
+      const x = pL + i*barStep + barStep*(1-0.72)/2;
+      let baseY = pT+cH;
+      datasets.forEach(d => {
+        const v = d.values[i]||0; if (v<=0) return;
+        const bH = (v/maxV)*cH; baseY -= bH;
+        s+=`<rect x="${x.toFixed(1)}" y="${baseY.toFixed(1)}" width="${barW.toFixed(1)}" height="${bH.toFixed(1)}" fill="${d.color}" rx="1.5"/>`;
+      });
+      if (i%skip===0||i===labels.length-1)
+        s+=`<text x="${(x+barW/2).toFixed(1)}" y="${pT+cH+11}" text-anchor="middle" font-size="8" fill="#aaa">${lbl}</text>`;
+    });
+    // axes
+    s+=`<line x1="${pL}" y1="${pT}" x2="${pL}" y2="${pT+cH}" stroke="#ccc" stroke-width="1"/>`;
+    s+=`<line x1="${pL}" y1="${pT+cH}" x2="${pL+cW}" y2="${pT+cH}" stroke="#ccc" stroke-width="1"/>`;
+    // legend
+    let lx=pL;
+    datasets.forEach(({label,color}) => { s+=`<rect x="${lx}" y="${h-9}" width="12" height="6" rx="2" fill="${color}"/><text x="${lx+15}" y="${h-3}" font-size="8.5" fill="#555">${label}</text>`; lx+=label.length*5+26; });
+    return s+'</svg>';
+  };
+
   // ── Build chart data ──
   const pieColors = ['#6F4E37','#2e7d32','#1565c0','#e65100','#6a1b9a','#00838f','#aaa'];
   const topProds  = prodArr.slice(0,6);
@@ -6361,6 +6402,27 @@ async function printInnsiktRapport() {
   ];
   const lineChartSvg = svgLine(tsLabels, [{label:'Omsetning',values:tsRev,color:'#2e7d32'},{label:'Innkjøp',values:tsCost,color:'#1565c0'}]);
   const pieChartSvg  = svgPie(pieSlices);
+
+  // ── Omsetning bar chart (kassasalg + bestillinger stacked) ──
+  const hasOrderRevBar = tsOrderRev.some(v => v > 0);
+  const barChartSvg = tsLabels.length > 0 ? svgBar(tsLabels, [
+    { label: 'Kassasalg (kr)',    values: tsPosRev,   color: '#2e7d32cc' },
+    ...(hasOrderRevBar ? [{ label: 'Bestillinger (kr)', values: tsOrderRev, color: '#a5d6a7cc' }] : [])
+  ]) : '';
+
+  // ── Inntekter vs. kostnader pie ──
+  const incomeCostSlices = [
+    ...(posRevenue    > 0 ? [{ label: '💰 Kassasalg',  value: posRevenue,                        color: '#2e7d32' }] : []),
+    ...(privateRevenue> 0 ? [{ label: '📄 Faktura',     value: privateRevenue,                    color: '#66bb6a' }] : []),
+    ...(['supermarked','kantine','ekstern']
+        .filter(t => receiptDiag[t]?.amount > 0)
+        .map(t => {
+          const colors = { supermarked:'#1a3a6b', kantine:'#2563eb', ekstern:'#60a5fa' };
+          const icons  = { supermarked:'🛒 Supermarked', kantine:'🏢 Kantine', ekstern:'🏪 Ekstern' };
+          return { label: icons[t], value: receiptDiag[t].amount, color: colors[t] };
+        }))
+  ];
+  const incomeCostPieSvg = svgPie(incomeCostSlices, 140);
 
   // ── Sales table rows ──
   const salesRows = prodArr.length===0
@@ -6424,6 +6486,12 @@ async function printInnsiktRapport() {
     ${kpi(fmtN(totalWaste),  'Svinn (stk)',       totalWaste===0?'#2e7d32':'#b71c1c')}
     ${kpi(fmtN(g2gAmt),      '2Good2Go reddet',  '#388e3c')}
   </div>
+
+  ${barChartSvg || incomeCostPieSvg ? `
+  <div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:4px;page-break-inside:avoid">
+    ${barChartSvg       ? `<div style="flex:1">${sectionHead('Omsetning')}${barChartSvg}</div>` : ''}
+    ${incomeCostPieSvg  ? `<div style="flex:0 0 auto">${sectionHead('Inntekter vs. kostnader')}${incomeCostPieSvg}</div>` : ''}
+  </div>` : ''}
 
   ${lineChartSvg || pieChartSvg ? `
   <div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:4px;page-break-inside:avoid">
