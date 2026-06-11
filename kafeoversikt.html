@@ -108,6 +108,20 @@ create table private_orders (
 -- ALTER TABLE private_orders ADD COLUMN IF NOT EXISTS end_time time;
 -- ALTER TABLE order_requests ADD COLUMN IF NOT EXISTS delivery_end_time time;
 
+-- z_reports: daily cash register closeout (Z-rapport)
+-- create table if not exists z_reports (
+--   id bigint primary key generated always as identity,
+--   report_date date not null unique,
+--   z_number text,
+--   salg_25 numeric(12,2) default 0,
+--   salg_15 numeric(12,2) default 0,
+--   kontant numeric(12,2) default 0,
+--   bank numeric(12,2) default 0,
+--   created_at timestamptz default now()
+-- );
+-- alter table z_reports enable row level security;
+-- create policy "allow all" on z_reports for all using (true) with check (true);
+
 -- private_order_items: line items on private orders
 create table private_order_items (
   id bigint primary key generated always as identity,
@@ -590,22 +604,19 @@ async function startApp(role) {
 function getTabs(role) {
   if (role === 'admin') {
     return [
-      { id: 'innkjop',   label: '🛒 Innkjøp' },
-      { id: 'avfall',    label: '📋 Daglig' },
-      { id: 'salg',      label: '📊 Salg' },
-      { id: 'oppskrift', label: '📋 Oppskrifter' },
-      { id: 'ordre',     label: '📄 Faktura' },
-      { id: 'bord',      label: '🪑 Bord' },
-      { id: 'innsikt',   label: '💡 Innsikt' },
-      { id: 'lager',     label: '📦 Lager' },
+      { id: 'innkjop',    label: '🛒 Innkjøp' },
+      { id: 'daglig',     label: '📋 Daglig' },
+      { id: 'oppskrift',  label: '📋 Oppskrifter' },
+      { id: 'bestilling', label: '📑 Bestilling' },
+      { id: 'innsikt',    label: '💡 Innsikt' },
+      { id: 'lager',      label: '📦 Lager' },
     ];
   }
   return [
-    { id: 'innkjop', label: '🛒 Innkjøp' },
-    { id: 'avfall',  label: '📋 Daglig' },
-    { id: 'ordre',   label: '📄 Ordre' },
-    { id: 'bord',    label: '🪑 Bord' },
-    { id: 'lager',   label: '📦 Lager' },
+    { id: 'innkjop',    label: '🛒 Innkjøp' },
+    { id: 'daglig',     label: '📋 Daglig' },
+    { id: 'bestilling', label: '📑 Bestilling' },
+    { id: 'lager',      label: '📦 Lager' },
   ];
 }
 
@@ -666,13 +677,13 @@ function renderNav() {
     if (t.id === 'lager' && ST._lagerLow > 0) {
       label += ` <span style="background:#e53935;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px">${ST._lagerLow}</span>`;
     }
-    if (t.id === 'ordre' && ST._pendingRequests > 0) {
+    if (t.id === 'bestilling' && ST._pendingRequests > 0) {
       label += ` <span style="background:#e53935;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px">${ST._pendingRequests}</span>`;
     }
-    if (t.id === 'bord' && ST._bordBadge > 0) {
+    if (t.id === 'bestilling' && ST._bordBadge > 0) {
       label += ` <span style="background:#e53935;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px">${ST._bordBadge}</span>`;
     }
-    if (t.id === 'ordre' && ST._fakturaBadge > 0) {
+    if (t.id === 'bestilling' && ST._fakturaBadge > 0) {
       label += ` <span style="background:#1565c0;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:2px;white-space:nowrap" title="Fakturaer klare til å sendes">${ST._fakturaBadge}</span>`;
     }
     return `<button class="${ST.tab===t.id?'active':''}" onclick="switchTab('${t.id}')">${label}</button>`;
@@ -702,12 +713,11 @@ async function renderTab() {
   c.innerHTML = '<div class="empty">Laster...</div>';
   try {
     switch(ST.tab) {
-      case 'avfall':   c.innerHTML = await buildAvfall(); break;
+      case 'daglig':   c.innerHTML = await buildDaglig(); break;
       case 'innkjop':  c.innerHTML = await buildInnkjop(); break;
-      case 'salg':     c.innerHTML = await buildSalg(); break;
+      // case 'salg' merged into daglig
       case 'oppskrift':c.innerHTML = await buildOppskrift(); break;
-      case 'ordre':    c.innerHTML = await buildOrdre(); break;
-      case 'bord':     c.innerHTML = await buildBord(); break;
+      case 'bestilling': c.innerHTML = await buildBestilling(); break;
       case 'innsikt':  c.innerHTML = await buildInnsikt(); break;
       case 'lager':    c.innerHTML = await buildLager(); break;
       default:         c.innerHTML = '<div class="empty">Ukjent fane</div>';
@@ -770,10 +780,39 @@ function updateAvstemming() {
   });
 }
 
-async function buildAvfall() {
-  if (ST.role === 'admin' && ST.subTab.avfall === 'rapporter') {
-    return await buildDagligRapporter();
+// =============================================================
+//  DAGLIG (combines old Daglig + Salg tabs)
+// =============================================================
+async function buildDaglig() {
+  const subTab = ST.subTab.daglig || 'daglig';
+  const unmappedCount = (ST._salgPreviewData||[]).filter(r => !r.autoMatch && !r.pendingMap).length;
+
+  let content = '';
+  if      (subTab === 'daglig')     content = await buildAvfall();
+  else if (subTab === 'rapporter')  content = await buildDagligRapporter();
+  else if (subTab === 'dagoppgjor') content = await buildDagoppgjor();
+  else if (ST.role === 'admin') {
+    if      (subTab === 'import')    content = buildSalgImport();
+    else if (subTab === 'historikk') content = await buildSalgHistorikk();
+    else if (subTab === 'mapping')   content = buildSalgMapping();
   }
+
+  const adminSalgTabs = ST.role === 'admin' ? `
+    <button class="${subTab==='import'?'active':''}"    onclick="ST.subTab.daglig='import';renderTab()">📥 Importer salg</button>
+    <button class="${subTab==='historikk'?'active':''}" onclick="ST.subTab.daglig='historikk';renderTab()">📊 Historikk</button>
+    <button class="${subTab==='mapping'?'active':''}"   onclick="ST.subTab.daglig='mapping';renderTab()">🔗 Produktmapping${unmappedCount > 0 ? ` <span style="background:#e65100;color:white;border-radius:10px;padding:1px 6px;font-size:0.7rem;margin-left:2px">${unmappedCount}</span>` : ''}</button>` : '';
+
+  return `
+  <div class="sub-nav">
+    <button class="${subTab==='daglig'?'active':''}"     onclick="ST.subTab.daglig='daglig';renderTab()">📋 Daglig</button>
+    ${ST.role === 'admin' ? `<button class="${subTab==='rapporter'?'active':''}" onclick="ST.subTab.daglig='rapporter';renderTab()">🖨️ Rapporter</button>` : ''}
+    <button class="${subTab==='dagoppgjor'?'active':''}" onclick="ST.subTab.daglig='dagoppgjor';renderTab()">💰 Dagoppgjør</button>
+    ${adminSalgTabs}
+  </div>
+  ${content}`;
+}
+
+async function buildAvfall() {
   const logDate = ST._wasteState['_date'] || today();
 
   // ── 1. Fetch saved-dates + POS-dates for calendar (cached) ──────────────
@@ -1014,14 +1053,7 @@ async function buildAvfall() {
   const prevDs  = prevDay.toISOString().slice(0,10);
   const nextDs  = nextDay.toISOString().slice(0,10);
 
-  const avfallSubNav = ST.role === 'admin' ? `
-  <div class="sub-nav" style="margin-bottom:1rem">
-    <button class="active">📋 Daglig rapport</button>
-    <button onclick="ST.subTab.avfall='rapporter';renderTab()">🖨️ Skriv ut rapport</button>
-  </div>` : '';
-
   return `
-  ${avfallSubNav}
   ${calendarHtml}
   <div class="card" id="daglig-rapport-form">
     <div class="card-header">
@@ -1202,7 +1234,7 @@ async function buildDagligRapporter() {
 
   return `
   <div class="sub-nav" style="margin-bottom:1rem">
-    <button onclick="ST.subTab.avfall='rapport';renderTab()">📋 Daglig rapport</button>
+    <button onclick="ST.subTab.daglig='daglig';renderTab()">📋 Daglig rapport</button>
     <button class="active">🖨️ Skriv ut rapport</button>
   </div>
   <div class="card">
@@ -2625,23 +2657,200 @@ function matchPosName(posName) {
 }
 
 async function buildSalg() {
-  const subTab = ST.subTab.salg || 'import';
+  const subTab = ST.subTab.daglig || 'import';
   let content = '';
-  if      (subTab === 'import')   content = buildSalgImport();
-  else if (subTab === 'historikk') content = await buildSalgHistorikk();
-  else if (subTab === 'mapping')  content = buildSalgMapping();
+  if      (subTab === 'import')      content = buildSalgImport();
+  else if (subTab === 'historikk')   content = await buildSalgHistorikk();
+  else if (subTab === 'mapping')     content = buildSalgMapping();
+  else if (subTab === 'dagoppgjor')  content = await buildDagoppgjor();
 
   const unmappedCount = (ST._salgPreviewData||[]).filter(r => !r.autoMatch && !r.pendingMap).length;
 
   return `
   <div class="sub-nav">
-    <button class="${subTab==='import'?'active':''}"    onclick="ST.subTab.salg='import';renderTab()">📥 Importer</button>
-    <button class="${subTab==='historikk'?'active':''}" onclick="ST.subTab.salg='historikk';renderTab()">📋 Historikk</button>
-    <button class="${subTab==='mapping'?'active':''}"   onclick="ST.subTab.salg='mapping';renderTab()">🔗 Produktmapping ${ST.aliases.length > 0 ? `(${ST.aliases.length})` : ''}</button>
+    <button class="${subTab==='import'?'active':''}"     onclick="ST.subTab.daglig='import';renderTab()">📥 Importer</button>
+    <button class="${subTab==='historikk'?'active':''}"  onclick="ST.subTab.daglig='historikk';renderTab()">📋 Historikk</button>
+    <button class="${subTab==='mapping'?'active':''}"    onclick="ST.subTab.daglig='mapping';renderTab()">🔗 Produktmapping ${ST.aliases.length > 0 ? `(${ST.aliases.length})` : ''}</button>
+    <button class="${subTab==='dagoppgjor'?'active':''}" onclick="ST.subTab.daglig='dagoppgjor';renderTab()">💰 Dagoppgjør</button>
   </div>
   ${content}`;
 }
 
+// =============================================================
+//  DAGOPPGJØR (Z-RAPPORT)
+// =============================================================
+async function buildDagoppgjor() {
+  let reports = [];
+  try { reports = await sbGet('z_reports?order=report_date.desc&limit=180'); } catch(e) {}
+
+  const formDate = ST._zFormDate || today();
+  const existing = reports.find(r => r.report_date === formDate);
+  const isEdit   = !!existing;
+
+  // ISO week helper
+  const weekKey = dateStr => {
+    const d = new Date(dateStr); const day = d.getDay() || 7;
+    const thu = new Date(d); thu.setDate(d.getDate() - day + 4);
+    const yr = thu.getFullYear();
+    const wk = Math.ceil(((thu - new Date(yr,0,1)) / 86400000 + 1) / 7);
+    return `${yr}-W${String(wk).padStart(2,'0')}`;
+  };
+  const weekLabel = wk => {
+    const [yr, w] = wk.split('-W');
+    return `${yr}, uke ${w}`;
+  };
+
+  // Group by week
+  const weekGroups = {};
+  reports.forEach(r => {
+    const wk = weekKey(r.report_date);
+    if (!weekGroups[wk]) weekGroups[wk] = [];
+    weekGroups[wk].push(r);
+  });
+  const weeks = Object.keys(weekGroups).sort().reverse();
+  const currentWeek = weekKey(today());
+  const sum = (arr, field) => arr.reduce((s,r) => s + Number(r[field]||0), 0);
+
+  const weekCards = weeks.map(wk => {
+    const rows = weekGroups[wk];
+    const totSalg25  = sum(rows, 'salg_25');
+    const totSalg15  = sum(rows, 'salg_15');
+    const totSalg    = totSalg25 + totSalg15;
+    const totKontant = sum(rows, 'kontant');
+    const totBank    = sum(rows, 'bank');
+    const isCurrent  = wk === currentWeek;
+    return `
+    <div class="card" style="margin-bottom:1rem${isCurrent ? ';border-top:3px solid #2e7d32' : ''}">
+      <div class="card-header">
+        <span class="card-title">${weekLabel(wk)}${isCurrent ? ' <span style="background:#e8f5e9;color:#2e7d32;border-radius:4px;padding:1px 8px;font-size:0.74rem;font-weight:700;margin-left:6px">Denne uken</span>' : ''}</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="background:#e8f5e9;border-radius:8px;padding:9px 16px;text-align:center;flex:1;min-width:100px">
+          <div style="font-size:1.05rem;font-weight:800;color:#2e7d32">${fmt(totSalg)}</div>
+          <div style="font-size:0.72rem;color:#555;text-transform:uppercase;letter-spacing:0.05em;margin-top:2px">Total salg</div>
+        </div>
+        <div style="background:#e3f2fd;border-radius:8px;padding:9px 16px;text-align:center;flex:1;min-width:100px">
+          <div style="font-size:1.05rem;font-weight:800;color:#1565c0">${fmt(totKontant)}</div>
+          <div style="font-size:0.72rem;color:#555;text-transform:uppercase;letter-spacing:0.05em;margin-top:2px">Kontant i kassen</div>
+        </div>
+        <div style="background:#f3e5f5;border-radius:8px;padding:9px 16px;text-align:center;flex:1;min-width:100px">
+          <div style="font-size:1.05rem;font-weight:800;color:#6a1b9a">${fmt(totBank)}</div>
+          <div style="font-size:0.72rem;color:#555;text-transform:uppercase;letter-spacing:0.05em;margin-top:2px">Bank / kort</div>
+        </div>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Dato</th><th>Z-nr</th>
+          <th style="text-align:right">Salg 25%</th>
+          <th style="text-align:right">Salg 15%</th>
+          <th style="text-align:right">Kontant</th>
+          <th style="text-align:right">Bank/kort</th>
+          <th></th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => `<tr>
+            <td>${fmtDate(r.report_date)}</td>
+            <td>${esc(r.z_number||'—')}</td>
+            <td style="text-align:right">${fmt(Number(r.salg_25||0))}</td>
+            <td style="text-align:right">${fmt(Number(r.salg_15||0))}</td>
+            <td style="text-align:right;font-weight:600;color:#1565c0">${fmt(Number(r.kontant||0))}</td>
+            <td style="text-align:right">${fmt(Number(r.bank||0))}</td>
+            <td style="text-align:right;white-space:nowrap">
+              <button class="btn btn-sm" onclick="ST._zFormDate='${r.report_date}';ST.subTab.daglig='dagoppgjor';renderTab()" title="Rediger">✏️</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteZReport(${r.id})" title="Slett">🗑️</button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+        <tfoot><tr style="font-weight:700;background:#f5f0ec;border-top:2px solid #ccc">
+          <td colspan="2">Totalt</td>
+          <td style="text-align:right">${fmt(totSalg25)}</td>
+          <td style="text-align:right">${fmt(totSalg15)}</td>
+          <td style="text-align:right;color:#1565c0">${fmt(totKontant)}</td>
+          <td style="text-align:right">${fmt(totBank)}</td>
+          <td></td>
+        </tr></tfoot>
+      </table>
+    </div>`;
+  });
+
+  return `
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card-header">
+      <span class="card-title">${isEdit ? '✏️ Rediger dagoppgjør' : '+ Nytt dagoppgjør'}</span>
+      ${isEdit ? `<button class="btn btn-sm" onclick="ST._zFormDate=null;renderTab()">Avbryt</button>` : ''}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:14px">
+      <div>
+        <label style="font-size:0.82rem;font-weight:600;display:block;margin-bottom:4px">Dato</label>
+        ${mkDatePicker('z-date', formDate, "ST._zFormDate=this.value;renderTab()", 'width:100%;padding:7px 10px;font-size:0.93rem')}
+      </div>
+      <div>
+        <label style="font-size:0.82rem;font-weight:600;display:block;margin-bottom:4px">Z-rapport nr.</label>
+        <input type="text" id="z-number" value="${esc(existing?.z_number||'')}" placeholder="f.eks. Z0042"
+          style="width:100%;box-sizing:border-box;padding:7px 10px;font-size:0.93rem;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
+      </div>
+      <div>
+        <label style="font-size:0.82rem;font-weight:600;display:block;margin-bottom:4px">Salg 25%</label>
+        <input type="number" id="z-salg25" value="${existing?.salg_25 ?? ''}" placeholder="0.00" min="0" step="0.01"
+          style="width:100%;box-sizing:border-box;padding:7px 10px;font-size:0.93rem;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
+      </div>
+      <div>
+        <label style="font-size:0.82rem;font-weight:600;display:block;margin-bottom:4px">Salg 15%</label>
+        <input type="number" id="z-salg15" value="${existing?.salg_15 ?? ''}" placeholder="0.00" min="0" step="0.01"
+          style="width:100%;box-sizing:border-box;padding:7px 10px;font-size:0.93rem;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
+      </div>
+      <div>
+        <label style="font-size:0.82rem;font-weight:600;display:block;margin-bottom:4px">Kontant (kr)</label>
+        <input type="number" id="z-kontant" value="${existing?.kontant ?? ''}" placeholder="0.00" min="0" step="0.01"
+          style="width:100%;box-sizing:border-box;padding:7px 10px;font-size:0.93rem;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
+      </div>
+      <div>
+        <label style="font-size:0.82rem;font-weight:600;display:block;margin-bottom:4px">Bank / kort (kr)</label>
+        <input type="number" id="z-bank" value="${existing?.bank ?? ''}" placeholder="0.00" min="0" step="0.01"
+          style="width:100%;box-sizing:border-box;padding:7px 10px;font-size:0.93rem;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveZReport(${existing?.id ?? 'null'})">
+      💾 ${isEdit ? 'Lagre endringer' : 'Lagre dagoppgjør'}
+    </button>
+  </div>
+  ${weekCards.length > 0 ? weekCards.join('') : '<div class="card"><div class="empty">Ingen dagoppgjør registrert ennå — fyll inn skjemaet over for å starte</div></div>'}`;
+}
+
+async function saveZReport(existingId) {
+  const date    = el('z-date')?.value || today();
+  const zNumber = el('z-number')?.value?.trim() || null;
+  const salg25  = Number(el('z-salg25')?.value  || 0);
+  const salg15  = Number(el('z-salg15')?.value  || 0);
+  const kontant = Number(el('z-kontant')?.value  || 0);
+  const bank    = Number(el('z-bank')?.value     || 0);
+  if (!date) { showAlert('Dato er påkrevd', 'error'); return; }
+  const payload = { report_date: date, z_number: zNumber, salg_25: salg25, salg_15: salg15, kontant, bank };
+  try {
+    if (existingId) {
+      await sbPatch(`z_reports?id=eq.${existingId}`, payload);
+      showAlert('Dagoppgjør oppdatert');
+    } else {
+      await sbPost('z_reports', [payload]);
+      showAlert('Dagoppgjør lagret');
+    }
+    ST._zFormDate = null;
+    await renderTab();
+  } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
+}
+
+async function deleteZReport(id) {
+  if (!confirm('Slett dette dagoppgjøret?')) return;
+  try {
+    await sbDelete(`z_reports?id=eq.${id}`);
+    showAlert('Dagoppgjør slettet');
+    await renderTab();
+  } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
+}
+
+// =============================================================
+//  SALG — IMPORT
+// =============================================================
 function buildSalgImport() {
   const selDate = ST._salgDate || today();
   return `
@@ -4280,8 +4489,8 @@ async function finaliseBordOrder(requestId) {
       ST._ordreEdit = order;
       ST._ordreFormState = null;
       ST._ordreRows = rows.map((row, idx) => ({ id: Date.now() + idx, ...row }));
-      ST.tab = 'ordre';
-      ST.subTab.ordre = 'ny';
+      ST.tab = 'bestilling';
+      ST.subTab.bestilling = 'ny';
     }
     renderTab();
   } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
@@ -4290,7 +4499,7 @@ async function finaliseBordOrder(requestId) {
 // =============================================================
 //  TAB: ORDRE & FAKTURA
 // =============================================================
-async function buildOrdre() {
+async function buildBestilling() {
   // Load distinct past locations for autocomplete (once per session)
   if (!ST._pastLocations) {
     try {
@@ -4299,23 +4508,41 @@ async function buildOrdre() {
     } catch(e) { ST._pastLocations = []; }
   }
 
-  // Staff: show only the read-only order list
+  const subTab = ST.subTab.bestilling || (ST.role === 'admin' ? 'liste' : 'ordre');
+
+  // Staff: simpler two-section nav
   if (ST.role !== 'admin') {
-    return await buildOrdreListe();
+    return `
+    <div class="sub-nav">
+      <button class="${subTab==='ordre'?'active':''}" onclick="ST.subTab.bestilling='ordre';renderTab()">📋 Ordre</button>
+      <button class="${subTab==='bord'?'active':''}"  onclick="ST.subTab.bestilling='bord';renderTab()">🪑 Bord</button>
+    </div>
+    ${subTab === 'bord' ? await buildBord() : await buildOrdreListe()}`;
   }
 
-  const subTab = ST.subTab.ordre || 'liste';
+  // Admin: full flat sub-nav
   const reqBadge = ST._pendingRequests > 0
     ? ` <span style="background:#e53935;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:3px">${ST._pendingRequests}</span>`
     : '';
+  const bordBadgeSpan = ST._bordBadge > 0
+    ? ` <span style="background:#e53935;color:white;border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;vertical-align:middle;margin-left:3px">${ST._bordBadge}</span>`
+    : '';
+
+  let content = '';
+  if      (subTab === 'liste')        content = await buildOrdreListe();
+  else if (subTab === 'ny')           content = buildOrdreForm();
+  else if (subTab === 'foresporsler') content = await buildOrdreForesporsler();
+  else if (subTab === 'bord')         content = await buildBord();
+
   return `
   <div class="sub-nav">
-    <button class="${subTab==='liste'?'active':''}" onclick="ST.subTab.ordre='liste';renderTab()">📋 Alle ordre</button>
-    <button class="${subTab==='ny'?'active':''}" onclick="ST.subTab.ordre='ny';ST._ordreEdit=null;ST._ordreRows=null;ST._ordreFormState=null;renderTab()">+ Ny ordre</button>
-    <button class="${subTab==='foresporsler'?'active':''}" onclick="ST.subTab.ordre='foresporsler';renderTab()">📥 Forespørsler${reqBadge}</button>
-    ${ST._ordreEdit ? `<button class="active">✏️ Rediger ordre</button>` : ''}
+    <button class="${subTab==='liste'?'active':''}" onclick="ST.subTab.bestilling='liste';renderTab()">📋 Alle ordre</button>
+    <button class="${subTab==='ny'?'active':''}" onclick="ST.subTab.bestilling='ny';ST._ordreEdit=null;ST._ordreRows=null;ST._ordreFormState=null;renderTab()">+ Ny ordre</button>
+    <button class="${subTab==='foresporsler'?'active':''}" onclick="ST.subTab.bestilling='foresporsler';renderTab()">📥 Forespørsler${reqBadge}</button>
+    <button class="${subTab==='bord'?'active':''}" onclick="ST.subTab.bestilling='bord';renderTab()">🪑 Bord${bordBadgeSpan}</button>
+    ${ST._ordreEdit ? `<button class="active" style="pointer-events:none">✏️ Rediger ordre</button>` : ''}
   </div>
-  ${subTab==='liste' ? await buildOrdreListe() : subTab==='foresporsler' ? await buildOrdreForesporsler() : buildOrdreForm()}`;
+  ${content}`;
 }
 
 async function buildOrdreListe() {
@@ -4400,7 +4627,7 @@ async function buildOrdreForesporsler() {
     const actionsHtml = `
       <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
         ${showActions && isTable ? `
-        <button class="btn btn-primary btn-sm" onclick="ST.tab='bord';renderTab()">🪑 Håndter i Bord-fanen</button>
+        <button class="btn btn-primary btn-sm" onclick="ST.tab='bestilling';ST.subTab.bestilling='bord';renderTab()">🪑 Håndter i Bord-fanen</button>
         ` : showActions && !isTable ? `
         <button class="btn btn-primary btn-sm" onclick="confirmRequest(${r.id},'${esc(r.email||'')}','${esc(r.contact_name||r.invoice_to||'')}','${esc(r.invoice_to||'')}')">✅ Bekreft, opprett ordre & send e-post</button>
         <button class="btn btn-sm" style="border-color:#e53935;color:#e53935" onclick="dismissRequest(${r.id},'${esc(r.email||'')}','${esc(r.contact_name||r.invoice_to||'')}')">❌ Avslå & send e-post</button>
@@ -4489,7 +4716,7 @@ async function confirmRequest(id, email, name, invoiceTo) {
         total_price: (i.qty||1) * (prod?.selling_price||0)
       };
     });
-    ST.subTab.ordre = 'ny';
+    ST.subTab.bestilling = 'ny';
 
     // Store email details — will be sent after admin reviews and saves the order
     if (email) {
@@ -4504,7 +4731,7 @@ async function confirmRequest(id, email, name, invoiceTo) {
       };
     }
     showAlert('Forespørsel bekreftet! Kontroller priser og klikk Lagre — e-post åpnes automatisk.');
-    ST.tab = 'ordre';
+    ST.tab = 'bestilling';
     renderTab();
   } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
 }
@@ -4543,7 +4770,7 @@ async function reopenConfirmedRequest(id, email, name, invoiceTo) {
         total_price: (i.qty||1) * (prod?.selling_price||0)
       };
     });
-    ST.subTab.ordre = 'ny';
+    ST.subTab.bestilling = 'ny';
 
     // Set up email to send after saving
     if (email) {
@@ -4558,7 +4785,7 @@ async function reopenConfirmedRequest(id, email, name, invoiceTo) {
       };
     }
     showAlert('Skjema fyllt ut fra forespørsel — kontroller priser og klikk Lagre.');
-    ST.tab = 'ordre';
+    ST.tab = 'bestilling';
     renderTab();
   } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
 }
@@ -4619,7 +4846,7 @@ async function convertRequestToOrder(requestId) {
         total_price: (i.qty||1) * (prod?.selling_price||0)
       };
     });
-    ST.subTab.ordre = 'ny';
+    ST.subTab.bestilling = 'ny';
     renderTab();
   } catch(e) { showAlert('Feil: ' + e.message, 'error'); }
 }
@@ -4793,7 +5020,7 @@ function buildOrdreForm() {
     </div>
     <div class="row" style="margin-top:1rem">
       <button class="btn btn-primary" onclick="saveOrdre(${e2.id||0})">💾 Lagre ordre</button>
-      <button class="btn" onclick="ST.subTab.ordre='liste';ST._ordreEdit=null;ST._ordreRows=null;ST._ordreFormState=null;renderTab()">Avbryt</button>
+      <button class="btn" onclick="ST.subTab.bestilling='liste';ST._ordreEdit=null;ST._ordreRows=null;ST._ordreFormState=null;renderTab()">Avbryt</button>
     </div>
   </div>`;
 }
@@ -4952,7 +5179,7 @@ async function saveOrdre(id) {
     ST._ordreEdit = null;
     ST._ordreRows = null;
     ST._ordreFormState = null;
-    ST.subTab.ordre = 'liste';
+    ST.subTab.bestilling = 'liste';
     showAlert('Ordre lagret!');
 
     // If this save was triggered from a confirmed forespørsel, open the confirmation email now
@@ -4996,7 +5223,7 @@ async function editOrdre(id) {
     const [order] = await sbGet(`private_orders?id=eq.${id}&select=*,private_order_items(*)`);
     ST._ordreEdit = order;
     ST._ordreRows = (order.private_order_items||[]).map(i => ({ ...i, id: i.id || Date.now() }));
-    ST.subTab.ordre = 'ny';
+    ST.subTab.bestilling = 'ny';
     await renderTab();
   } catch(e) {
     showAlert('Feil: ' + e.message, 'error');
